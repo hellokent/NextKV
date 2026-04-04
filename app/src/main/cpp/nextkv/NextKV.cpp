@@ -67,15 +67,28 @@ void NextKV::dictPut(std::u16string_view key, uint16_t id) {
     size_t mask = m_flatDict.size() - 1;
     uint32_t hash = fast_hash(key);
     size_t idx = hash & mask;
-    while (m_flatDict[idx].occupied) {
-        if (m_flatDict[idx].key == key) {
-            m_flatDict[idx].id = id;
+    
+    Slot currentSlot = {key, id, 0, true};
+    
+    while (true) {
+        if (!m_flatDict[idx].occupied) {
+            m_flatDict[idx] = currentSlot;
+            m_dictCount++;
             return;
         }
+        
+        if (m_flatDict[idx].key == currentSlot.key) {
+            m_flatDict[idx].id = currentSlot.id; // Update existing
+            return;
+        }
+        
+        if (m_flatDict[idx].psl < currentSlot.psl) {
+            std::swap(m_flatDict[idx], currentSlot);
+        }
+        
+        currentSlot.psl++;
         idx = (idx + 1) & mask;
     }
-    m_flatDict[idx] = {key, id, true};
-    m_dictCount++;
 }
 
 uint16_t NextKV::dictGet(std::u16string_view key) {
@@ -83,8 +96,12 @@ uint16_t NextKV::dictGet(std::u16string_view key) {
     size_t mask = m_flatDict.size() - 1;
     uint32_t hash = fast_hash(key);
     size_t idx = hash & mask;
+    uint16_t dist = 0;
+    
     while (m_flatDict[idx].occupied) {
         if (m_flatDict[idx].key == key) return m_flatDict[idx].id;
+        if (dist > m_flatDict[idx].psl) return 0; // The item we're looking for would have been swapped here! Early exit!
+        dist++;
         idx = (idx + 1) & mask;
     }
     return 0;
@@ -92,7 +109,7 @@ uint16_t NextKV::dictGet(std::u16string_view key) {
 
 void NextKV::dictResize() {
     std::vector<Slot> old = std::move(m_flatDict);
-    m_flatDict.assign(old.size() * 2, {std::u16string_view(), 0, false});
+    m_flatDict.assign(old.size() * 2, {std::u16string_view(), 0, 0, false});
     m_dictCount = 0;
     for (const auto& s : old) {
         if (s.occupied) dictPut(s.key, s.id);
@@ -100,7 +117,7 @@ void NextKV::dictResize() {
 }
 
 NextKV::NextKV(const std::string& path, bool multiProcess) : m_path(path), m_fd(-1), m_mmapPtr(nullptr), m_capacity(0), m_localOffset(sizeof(FileHeader)), m_localSequence(0), m_multiProcess(multiProcess), m_dictCount(0) {
-    m_flatDict.assign(8192, {std::u16string_view(), 0, false});
+    m_flatDict.assign(8192, {std::u16string_view(), 0, 0, false});
     m_fd = open(m_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (m_fd < 0) {
         LOGE("Failed to open file: %s", m_path.c_str());

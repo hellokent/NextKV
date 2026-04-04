@@ -1,7 +1,8 @@
 package com.example.nextkv;
 
 import dalvik.annotation.optimization.FastNative;
-import java.util.concurrent.ConcurrentHashMap;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 public class NextKV {
     static {
@@ -9,14 +10,30 @@ public class NextKV {
     }
 
     private final boolean mIsMultiProcess;
-    private final ConcurrentHashMap<String, Object> mCache;
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> mCache;
+    
+    private ByteBuffer mRootBuffer;
+    private final ThreadLocal<ByteBuffer> mThreadBuffer = new ThreadLocal<ByteBuffer>() {
+        @Override
+        protected ByteBuffer initialValue() {
+            if (mRootBuffer != null) {
+                return mRootBuffer.duplicate().order(ByteOrder.nativeOrder());
+            }
+            return null;
+        }
+    };
 
     public NextKV(boolean isMultiProcess) {
         this.mIsMultiProcess = isMultiProcess;
         if (!isMultiProcess) {
-            mCache = new ConcurrentHashMap<>(8192);
+            mCache = new java.util.concurrent.ConcurrentHashMap<>(8192);
         } else {
             mCache = null;
+        }
+        
+        mRootBuffer = nativeGetSharedByteBuffer();
+        if (mRootBuffer != null) {
+            mRootBuffer.order(ByteOrder.nativeOrder());
         }
     }
 
@@ -25,6 +42,12 @@ public class NextKV {
     }
 
     public static native void init(String path, boolean multiProcess);
+
+    @FastNative
+    private native ByteBuffer nativeGetSharedByteBuffer();
+
+    @FastNative
+    private native long nativeGetRecordMeta(String key);
 
     @FastNative
     private native void nativePutString(String key, String value);
@@ -93,9 +116,31 @@ public class NextKV {
         return result;
     }
 
-    // For getStringFast, we will just map it to getString since we removed DirectByteBuffer
     public String getStringFast(String key, String defaultValue) {
-        return getString(key, defaultValue);
+        if (!mIsMultiProcess && mCache != null) {
+            Object obj = mCache.get(key);
+            if (obj != null && obj instanceof String) return (String) obj;
+        }
+
+        long meta = nativeGetRecordMeta(key);
+        if (meta == 0) return defaultValue;
+        int offset = (int) (meta >>> 32);
+        int size = (int) (meta & 0xFFFFFFFFL);
+        if (size == 0) return defaultValue;
+        
+        ByteBuffer buffer = mThreadBuffer.get();
+        if (buffer == null) return defaultValue;
+        
+        buffer.limit(offset + size);
+        buffer.position(offset);
+        char[] chars = new char[size / 2];
+        buffer.asCharBuffer().get(chars);
+        String result = new String(chars);
+
+        if (!mIsMultiProcess && mCache != null) {
+            mCache.put(key, result);
+        }
+        return result;
     }
 
     public void putInt(String key, int value) {

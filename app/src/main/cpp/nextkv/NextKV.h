@@ -71,6 +71,7 @@ private:
     struct Slot {
         std::u16string_view key;
         uint16_t id;
+        uint16_t psl;
         bool occupied;
     };
     std::vector<Slot> m_flatDict;

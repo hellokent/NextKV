@@ -203,15 +203,14 @@ Java_com_example_nextkv_NextKV_nativeClearAll(JNIEnv* env, jobject thiz) {
     g_nextKV->clearAll();
 }
 
-// These two are currently not used if DirectByteBuffer is removed, but we keep them just in case
 extern "C" JNIEXPORT jobject JNICALL
-Java_com_example_nextkv_NextKV_getSharedByteBuffer(JNIEnv* env, jobject thiz) {
+Java_com_example_nextkv_NextKV_nativeGetSharedByteBuffer(JNIEnv* env, jobject thiz) {
     if (!g_nextKV) return nullptr;
     return env->NewDirectByteBuffer(g_nextKV->getMmapPtr(), g_nextKV->getCapacity());
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_nextkv_NextKV_getRecordMeta(JNIEnv* env, jobject thiz, jstring key) {
+Java_com_example_nextkv_NextKV_nativeGetRecordMeta(JNIEnv* env, jobject thiz, jstring key) {
     if (!g_nextKV) return 0;
     JStringU16View k(env, key);
     return g_nextKV->getRecordMeta(k.view());
