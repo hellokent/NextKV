@@ -50,6 +50,10 @@ target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
     -ftree-vectorize
 )
 
+if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "armeabi-v7a" OR ${CMAKE_ANDROID_ARCH_ABI} STREQUAL "arm64-v8a")
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -mcrc)
+endif()
+
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     -O3
     -flto

@@ -4,7 +4,6 @@ import android.content.Context;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -14,21 +13,20 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class NextKVUnitTest {
-    private NextKV nextkv;
 
-    @Before
-    public void setup() {
+    private NextKV setupKV(boolean isMultiProcess) {
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File nextKvFile = new File(appContext.getFilesDir(), "nextkv_unit.data");
+        File nextKvFile = new File(appContext.getFilesDir(), "nextkv_unit_" + isMultiProcess + ".data");
         if (nextKvFile.exists()) {
             nextKvFile.delete();
         }
-        NextKV.init(nextKvFile.getAbsolutePath());
-        nextkv = new NextKV();
+        NextKV.init(nextKvFile.getAbsolutePath(), isMultiProcess);
+        return new NextKV(isMultiProcess);
     }
 
-    @Test
-    public void testBasicTypes() {
+    private void runBasicTypesTest(boolean isMultiProcess) {
+        NextKV nextkv = setupKV(isMultiProcess);
+        
         // String
         nextkv.putString("str_key", "hello world");
         assertEquals("hello world", nextkv.getString("str_key", ""));
@@ -59,16 +57,16 @@ public class NextKVUnitTest {
         assertArrayEquals(bytes, nextkv.getByteArray("bytes_key"));
     }
 
-    @Test
-    public void testUpdate() {
+    private void runUpdateTest(boolean isMultiProcess) {
+        NextKV nextkv = setupKV(isMultiProcess);
         nextkv.putString("update_key", "first");
         assertEquals("first", nextkv.getString("update_key", ""));
         nextkv.putString("update_key", "second");
         assertEquals("second", nextkv.getString("update_key", ""));
     }
 
-    @Test
-    public void testRemoveAndContains() {
+    private void runRemoveAndContainsTest(boolean isMultiProcess) {
+        NextKV nextkv = setupKV(isMultiProcess);
         nextkv.putString("rem_key", "to_be_removed");
         assertTrue(nextkv.contains("rem_key"));
         
@@ -77,8 +75,8 @@ public class NextKVUnitTest {
         assertEquals("default", nextkv.getString("rem_key", "default"));
     }
 
-    @Test
-    public void testClearAll() {
+    private void runClearAllTest(boolean isMultiProcess) {
+        NextKV nextkv = setupKV(isMultiProcess);
         nextkv.putString("k1", "v1");
         nextkv.putInt("k2", 2);
         assertTrue(nextkv.contains("k1"));
@@ -88,4 +86,24 @@ public class NextKVUnitTest {
         assertFalse(nextkv.contains("k2"));
         assertEquals("def", nextkv.getString("k1", "def"));
     }
+
+    @Test
+    public void testBasicTypesSP() { runBasicTypesTest(false); }
+    @Test
+    public void testBasicTypesMP() { runBasicTypesTest(true); }
+
+    @Test
+    public void testUpdateSP() { runUpdateTest(false); }
+    @Test
+    public void testUpdateMP() { runUpdateTest(true); }
+
+    @Test
+    public void testRemoveAndContainsSP() { runRemoveAndContainsTest(false); }
+    @Test
+    public void testRemoveAndContainsMP() { runRemoveAndContainsTest(true); }
+
+    @Test
+    public void testClearAllSP() { runClearAllTest(false); }
+    @Test
+    public void testClearAllMP() { runClearAllTest(true); }
 }
