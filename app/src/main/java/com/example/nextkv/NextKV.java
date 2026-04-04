@@ -3,6 +3,8 @@ package com.example.nextkv;
 import dalvik.annotation.optimization.FastNative;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.lang.reflect.Field;
+import sun.misc.Unsafe;
 
 public class NextKV {
     static {
@@ -22,6 +24,10 @@ public class NextKV {
             return null;
         }
     };
+    
+    private long mBaseAddress = 0;
+    private Unsafe mUnsafe = null;
+    private long mCharBaseOffset = 0;
 
     public NextKV(boolean isMultiProcess) {
         this.mIsMultiProcess = isMultiProcess;
@@ -34,6 +40,18 @@ public class NextKV {
         mRootBuffer = nativeGetSharedByteBuffer();
         if (mRootBuffer != null) {
             mRootBuffer.order(ByteOrder.nativeOrder());
+            try {
+                Field addrField = java.nio.Buffer.class.getDeclaredField("address");
+                addrField.setAccessible(true);
+                mBaseAddress = addrField.getLong(mRootBuffer);
+                
+                Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+                unsafeField.setAccessible(true);
+                mUnsafe = (Unsafe) unsafeField.get(null);
+                mCharBaseOffset = mUnsafe.arrayBaseOffset(char[].class);
+            } catch (Exception e) {
+                // Silently fallback to ThreadLocal ByteBuffer
+            }
         }
     }
 
