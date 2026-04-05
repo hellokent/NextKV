@@ -44,6 +44,9 @@ public:
     uint8_t* getMmapPtr() const { return m_mmapPtr; }
     size_t getCapacity() const { return m_capacity; }
     uint64_t getRecordMeta(std::u16string_view key); // Returns (offset << 32) | size
+    uint32_t getSequence();
+    void sync();
+    void async();
 
 private:
     struct DataPointer {
@@ -95,12 +98,16 @@ private:
     void dictResize();
 
     uint16_t getOrCreateKeyId(std::u16string_view key, bool& isNew);
+    void writeKeyDefinition(uint16_t keyId, std::u16string_view key);
     void ensureCapacity(size_t sizeNeeded);
     void recoverDelta();
     void recoverAll();
     
     uint32_t allocateSpace(uint32_t size);
     void freeSpace(uint32_t offset, uint32_t size);
+
+    template <bool MP, typename T> inline void putPrimitiveCore(std::u16string_view key, T value);
+    template <bool MP, typename T> inline T getPrimitiveCore(std::u16string_view key, T defaultValue);
 
     template <bool MP> inline void putStringCore(std::u16string_view key, std::u16string_view value);
     template <bool MP> inline bool getStringCore(std::u16string_view key, std::vector<char16_t>& outBuf);

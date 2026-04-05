@@ -13,7 +13,7 @@
 #define LOG_TAG "NextKV_Native"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-const size_t INITIAL_CAPACITY = 64 * 1024 * 1024; 
+const size_t INITIAL_CAPACITY = 4096; // 4KB
 const uint32_t TOMBSTONE_MAGIC = 0xffffffff;
 const uint32_t NKV_MAGIC = 0x4E4B5631;
 
@@ -134,6 +134,12 @@ NextKV::NextKV(const std::string& path, bool multiProcess) : m_path(path), m_fd(
     }
 
     m_mmapPtr = (uint8_t*)mmap(nullptr, m_capacity, PROT_READ | PROT_WRITE, MAP_SHARED, m_fd, 0);
+    if (m_mmapPtr == MAP_FAILED) {
+        LOGE("Failed to mmap file");
+        m_mmapPtr = nullptr;
+        return;
+    }
+
     m_memTable.resize(65536); 
     recoverAll();
 }
@@ -161,12 +167,12 @@ inline void NextKV::lockWriteImpl() {
 
 template <bool MP>
 inline void NextKV::unlockWriteImpl() {
-    if constexpr (MP) {
-        if (m_mmapPtr) {
-            FileHeader* header = reinterpret_cast<FileHeader*>(m_mmapPtr);
-            header->currentOffset = m_localOffset;
-            header->sequence++;
-            m_localSequence = header->sequence;
+    if (m_mmapPtr) {
+        FileHeader* header = reinterpret_cast<FileHeader*>(m_mmapPtr);
+        header->currentOffset = m_localOffset;
+        header->sequence++;
+        m_localSequence = header->sequence;
+        if constexpr (MP) {
             __atomic_clear(&header->processLock, __ATOMIC_RELEASE);
         }
     }
@@ -234,6 +240,24 @@ void NextKV::recoverDelta() {
         uint32_t size;
         memcpy(&size, m_mmapPtr + offset + 2, 4);
         
+        if (size == 0x7FFFFFFF) {
+            uint16_t keyBytes;
+            memcpy(&keyBytes, m_mmapPtr + offset + 6, 2);
+            if (offset + 8 + keyBytes <= m_capacity) {
+                if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
+                if (keyId >= m_nextKeyId) m_nextKeyId = keyId + 1;
+                
+                if (dictGet(std::u16string_view((char16_t*)(m_mmapPtr + offset + 8), keyBytes / 2)) == 0) {
+                    m_keyStore.emplace_back(std::u16string((char16_t*)(m_mmapPtr + offset + 8), keyBytes / 2));
+                    dictPut(m_keyStore.back(), keyId);
+                }
+                offset += 8 + keyBytes;
+            } else {
+                break;
+            }
+            continue;
+        }
+        
         bool isTombstone = (size & 0x80000000) != 0;
         uint32_t payloadSize = size & 0x7FFFFFFF;
         
@@ -263,6 +287,20 @@ void NextKV::recoverAll() {
     recoverDelta();
 }
 
+void NextKV::writeKeyDefinition(uint16_t keyId, std::u16string_view key) {
+    uint32_t keyBytes = key.size() * 2;
+    uint32_t sizeNeeded = 6 + 2 + keyBytes; // keyId(2) + size(4) + keyLen(2) + key
+    ensureCapacity(sizeNeeded);
+    uint32_t offset = m_localOffset;
+    
+    *(uint16_t*)(m_mmapPtr + offset) = keyId;
+    *(uint32_t*)(m_mmapPtr + offset + 2) = 0x7FFFFFFF;
+    *(uint16_t*)(m_mmapPtr + offset + 6) = (uint16_t)keyBytes;
+    memcpy(m_mmapPtr + offset + 8, key.data(), keyBytes);
+    
+    m_localOffset += sizeNeeded;
+}
+
 uint16_t NextKV::getOrCreateKeyId(std::u16string_view key, bool& isNew) {
     uint16_t id = dictGet(key);
     if (id != 0) {
@@ -273,6 +311,11 @@ uint16_t NextKV::getOrCreateKeyId(std::u16string_view key, bool& isNew) {
     uint16_t newId = m_nextKeyId++;
     m_keyStore.emplace_back(std::u16string(key));
     dictPut(m_keyStore.back(), newId);
+    
+    if (m_mmapPtr) {
+        writeKeyDefinition(newId, m_keyStore.back());
+    }
+    
     return newId;
 }
 
@@ -323,6 +366,31 @@ uint64_t NextKV::getRecordMeta(std::u16string_view key) {
     return meta;
 }
 
+uint32_t NextKV::getSequence() {
+    lockReadImpl<false>();
+    uint32_t seq = 0;
+    if (m_mmapPtr) {
+        seq = reinterpret_cast<const FileHeader*>(m_mmapPtr)->sequence;
+    }
+    unlockReadImpl<false>();
+    return seq;
+}
+
+void NextKV::sync() {
+    lockReadImpl<false>();
+    if (m_mmapPtr) {
+        msync(m_mmapPtr, m_capacity, MS_SYNC);
+    }
+    unlockReadImpl<false>();
+}
+
+void NextKV::async() {
+    lockReadImpl<false>();
+    if (m_mmapPtr) {
+        msync(m_mmapPtr, m_capacity, MS_ASYNC);
+    }
+    unlockReadImpl<false>();
+}
 
 template <bool MP>
 inline void NextKV::putStringCore(std::u16string_view key, std::u16string_view value) {
@@ -337,10 +405,12 @@ inline void NextKV::putStringCore(std::u16string_view key, std::u16string_view v
         if (!isNew && keyId < m_memTable.size()) {
             DataPointer oldDp = m_memTable[keyId];
             uint32_t oldCap = oldDp.size & 0x7FFFFFFF;
-            if (oldDp.offset != 0 && size == oldCap) {
+            if (oldDp.offset != 0 && size <= oldCap) {
                 uint32_t newSize = size;
-                memcpy(m_mmapPtr + oldDp.offset - 4, &newSize, 4);
-                memcpy(m_mmapPtr + oldDp.offset, value.data(), size);
+                *(uint32_t*)(m_mmapPtr + oldDp.offset - 4) = newSize;
+                if (size > 0) {
+                    memcpy(m_mmapPtr + oldDp.offset, value.data(), size);
+                }
                 m_memTable[keyId] = { oldDp.offset, size };
                 unlockWriteImpl<MP>();
                 return;
@@ -351,9 +421,11 @@ inline void NextKV::putStringCore(std::u16string_view key, std::u16string_view v
     }
     
     uint32_t offset = allocateSpace(size);
-    memcpy(m_mmapPtr + offset, &keyId, 2);
-    memcpy(m_mmapPtr + offset + 2, &size, 4);
-    memcpy(m_mmapPtr + offset + 6, value.data(), size);
+    *(uint16_t*)(m_mmapPtr + offset) = keyId;
+    *(uint32_t*)(m_mmapPtr + offset + 2) = size;
+    if (size > 0) {
+        memcpy(m_mmapPtr + offset + 6, value.data(), size);
+    }
     
     if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
     m_memTable[keyId] = { offset + 6, size };
@@ -384,9 +456,57 @@ bool NextKV::getString(std::u16string_view key, std::vector<char16_t>& outBuf) {
     return getStringCore<false>(key, outBuf);
 }
 
+template <bool MP, typename T>
+inline void NextKV::putPrimitiveCore(std::u16string_view key, T value) {
+    lockWriteImpl<MP>();
+    if (!m_mmapPtr) { unlockWriteImpl<MP>(); return; }
+
+    bool isNew = false;
+    uint16_t keyId = getOrCreateKeyId(key, isNew);
+    uint32_t size = sizeof(T);
+
+    if constexpr (!MP) {
+        if (!isNew && keyId < m_memTable.size()) {
+            DataPointer oldDp = m_memTable[keyId];
+            uint32_t oldCap = oldDp.size & 0x7FFFFFFF;
+            if (oldDp.offset != 0 && size == oldCap) {
+                *(T*)(m_mmapPtr + oldDp.offset) = value;
+                unlockWriteImpl<MP>();
+                return;
+            } else if (oldDp.offset != 0 && !(oldDp.size & 0x80000000)) {
+                freeSpace(oldDp.offset, oldCap);
+            }
+        }
+    }
+
+    uint32_t offset = allocateSpace(size);
+    *(uint16_t*)(m_mmapPtr + offset) = keyId;
+    *(uint32_t*)(m_mmapPtr + offset + 2) = size;
+    *(T*)(m_mmapPtr + offset + 6) = value;
+    
+    if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
+    m_memTable[keyId] = { offset + 6, size };
+    unlockWriteImpl<MP>();
+}
+
+template <bool MP, typename T>
+inline T NextKV::getPrimitiveCore(std::u16string_view key, T defaultValue) {
+    lockReadImpl<MP>();
+    uint16_t id = dictGet(key);
+    if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
+    DataPointer dp = m_memTable[id];
+    if (dp.size != sizeof(T) || dp.offset == 0 || (dp.size & 0x80000000)) { 
+        unlockReadImpl<MP>(); 
+        return defaultValue; 
+    }
+    T val = *(T*)(m_mmapPtr + dp.offset);
+    unlockReadImpl<MP>();
+    return val;
+}
+
 template <bool MP>
 inline void NextKV::putIntCore(std::u16string_view key, int32_t value) {
-    putStringCore<MP>(key, std::u16string_view((char16_t*)&value, sizeof(int32_t) / 2));
+    putPrimitiveCore<MP, int32_t>(key, value);
 }
 
 void NextKV::putInt(std::u16string_view key, int32_t value) {
@@ -396,15 +516,7 @@ void NextKV::putInt(std::u16string_view key, int32_t value) {
 
 template <bool MP>
 inline int32_t NextKV::getIntCore(std::u16string_view key, int32_t defaultValue) {
-    lockReadImpl<MP>();
-    uint16_t id = dictGet(key);
-    if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
-    DataPointer dp = m_memTable[id];
-    if (dp.size != sizeof(int32_t)) { unlockReadImpl<MP>(); return defaultValue; }
-    int32_t val;
-    memcpy(&val, m_mmapPtr + dp.offset, sizeof(int32_t));
-    unlockReadImpl<MP>();
-    return val;
+    return getPrimitiveCore<MP, int32_t>(key, defaultValue);
 }
 
 int32_t NextKV::getInt(std::u16string_view key, int32_t defaultValue) {
@@ -415,7 +527,7 @@ int32_t NextKV::getInt(std::u16string_view key, int32_t defaultValue) {
 template <bool MP>
 inline void NextKV::putBoolCore(std::u16string_view key, bool value) {
     uint16_t val = value ? 1 : 0; 
-    putStringCore<MP>(key, std::u16string_view((char16_t*)&val, 1));
+    putPrimitiveCore<MP, uint16_t>(key, val);
 }
 
 void NextKV::putBool(std::u16string_view key, bool value) {
@@ -429,9 +541,8 @@ inline bool NextKV::getBoolCore(std::u16string_view key, bool defaultValue) {
     uint16_t id = dictGet(key);
     if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
     DataPointer dp = m_memTable[id];
-    if (dp.size != 2) { unlockReadImpl<MP>(); return defaultValue; } 
-    uint16_t val;
-    memcpy(&val, m_mmapPtr + dp.offset, 2);
+    if (dp.size != 2 || dp.offset == 0 || (dp.size & 0x80000000)) { unlockReadImpl<MP>(); return defaultValue; } 
+    uint16_t val = *(uint16_t*)(m_mmapPtr + dp.offset);
     unlockReadImpl<MP>();
     return val != 0;
 }
@@ -443,7 +554,7 @@ bool NextKV::getBool(std::u16string_view key, bool defaultValue) {
 
 template <bool MP>
 inline void NextKV::putFloatCore(std::u16string_view key, float value) {
-    putStringCore<MP>(key, std::u16string_view((char16_t*)&value, sizeof(float) / 2));
+    putPrimitiveCore<MP, float>(key, value);
 }
 
 void NextKV::putFloat(std::u16string_view key, float value) {
@@ -453,15 +564,7 @@ void NextKV::putFloat(std::u16string_view key, float value) {
 
 template <bool MP>
 inline float NextKV::getFloatCore(std::u16string_view key, float defaultValue) {
-    lockReadImpl<MP>();
-    uint16_t id = dictGet(key);
-    if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
-    DataPointer dp = m_memTable[id];
-    if (dp.size != sizeof(float)) { unlockReadImpl<MP>(); return defaultValue; }
-    float val;
-    memcpy(&val, m_mmapPtr + dp.offset, sizeof(float));
-    unlockReadImpl<MP>();
-    return val;
+    return getPrimitiveCore<MP, float>(key, defaultValue);
 }
 
 float NextKV::getFloat(std::u16string_view key, float defaultValue) {
@@ -471,7 +574,7 @@ float NextKV::getFloat(std::u16string_view key, float defaultValue) {
 
 template <bool MP>
 inline void NextKV::putLongCore(std::u16string_view key, int64_t value) {
-    putStringCore<MP>(key, std::u16string_view((char16_t*)&value, sizeof(int64_t) / 2));
+    putPrimitiveCore<MP, int64_t>(key, value);
 }
 
 void NextKV::putLong(std::u16string_view key, int64_t value) {
@@ -481,15 +584,7 @@ void NextKV::putLong(std::u16string_view key, int64_t value) {
 
 template <bool MP>
 inline int64_t NextKV::getLongCore(std::u16string_view key, int64_t defaultValue) {
-    lockReadImpl<MP>();
-    uint16_t id = dictGet(key);
-    if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
-    DataPointer dp = m_memTable[id];
-    if (dp.size != sizeof(int64_t)) { unlockReadImpl<MP>(); return defaultValue; }
-    int64_t val;
-    memcpy(&val, m_mmapPtr + dp.offset, sizeof(int64_t));
-    unlockReadImpl<MP>();
-    return val;
+    return getPrimitiveCore<MP, int64_t>(key, defaultValue);
 }
 
 int64_t NextKV::getLong(std::u16string_view key, int64_t defaultValue) {
@@ -499,7 +594,7 @@ int64_t NextKV::getLong(std::u16string_view key, int64_t defaultValue) {
 
 template <bool MP>
 inline void NextKV::putDoubleCore(std::u16string_view key, double value) {
-    putStringCore<MP>(key, std::u16string_view((char16_t*)&value, sizeof(double) / 2));
+    putPrimitiveCore<MP, double>(key, value);
 }
 
 void NextKV::putDouble(std::u16string_view key, double value) {
@@ -509,15 +604,7 @@ void NextKV::putDouble(std::u16string_view key, double value) {
 
 template <bool MP>
 inline double NextKV::getDoubleCore(std::u16string_view key, double defaultValue) {
-    lockReadImpl<MP>();
-    uint16_t id = dictGet(key);
-    if (id == 0) { unlockReadImpl<MP>(); return defaultValue; }
-    DataPointer dp = m_memTable[id];
-    if (dp.size != sizeof(double)) { unlockReadImpl<MP>(); return defaultValue; }
-    double val;
-    memcpy(&val, m_mmapPtr + dp.offset, sizeof(double));
-    unlockReadImpl<MP>();
-    return val;
+    return getPrimitiveCore<MP, double>(key, defaultValue);
 }
 
 double NextKV::getDouble(std::u16string_view key, double defaultValue) {

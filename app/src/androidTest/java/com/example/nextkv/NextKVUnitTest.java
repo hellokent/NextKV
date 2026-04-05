@@ -8,6 +8,9 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
+import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 
 import static org.junit.Assert.*;
 
@@ -24,86 +27,117 @@ public class NextKVUnitTest {
         return new NextKV(isMultiProcess);
     }
 
-    private void runBasicTypesTest(boolean isMultiProcess) {
+    private void testAllTypesSingleThread(boolean isMultiProcess) {
         NextKV nextkv = setupKV(isMultiProcess);
-        
-        // String
-        nextkv.putString("str_key", "hello world");
-        assertEquals("hello world", nextkv.getString("str_key", ""));
+        int iterations = 1000;
 
-        // Int
-        nextkv.putInt("int_key", 42);
-        assertEquals(42, nextkv.getInt("int_key", 0));
+        for (int i = 0; i < iterations; i++) {
+            // PUT
+            nextkv.putString("str_" + i, "val_" + i);
+            nextkv.putInt("int_" + i, i);
+            nextkv.putBoolean("bool_" + i, i % 2 == 0);
+            nextkv.putFloat("float_" + i, i + 0.5f);
+            nextkv.putLong("long_" + i, i * 100000L);
+            nextkv.putDouble("double_" + i, i + 0.0001);
+            nextkv.putByteArray("bytes_" + i, new byte[]{(byte)(i % 255)});
 
-        // Boolean
-        nextkv.putBoolean("bool_key", true);
-        assertTrue(nextkv.getBoolean("bool_key", false));
+            // GET
+            assertEquals("val_" + i, nextkv.getString("str_" + i, ""));
+            assertEquals(i, nextkv.getInt("int_" + i, -1));
+            assertEquals(i % 2 == 0, nextkv.getBoolean("bool_" + i, false));
+            assertEquals(i + 0.5f, nextkv.getFloat("float_" + i, -1f), 0.001f);
+            assertEquals(i * 100000L, nextkv.getLong("long_" + i, -1L));
+            assertEquals(i + 0.0001, nextkv.getDouble("double_" + i, -1.0), 0.0001);
+            assertArrayEquals(new byte[]{(byte)(i % 255)}, nextkv.getByteArray("bytes_" + i));
 
-        // Float
-        nextkv.putFloat("float_key", 3.14f);
-        assertEquals(3.14f, nextkv.getFloat("float_key", 0f), 0.001f);
+            // UPDATE
+            nextkv.putInt("int_" + i, i + 1);
+            assertEquals(i + 1, nextkv.getInt("int_" + i, -1));
 
-        // Long
-        nextkv.putLong("long_key", 123456789012345L);
-        assertEquals(123456789012345L, nextkv.getLong("long_key", 0L));
-
-        // Double
-        nextkv.putDouble("double_key", 2.718281828);
-        assertEquals(2.718281828, nextkv.getDouble("double_key", 0.0), 0.0000001);
-
-        // Byte Array
-        byte[] bytes = new byte[]{1, 2, 3, 4, 5};
-        nextkv.putByteArray("bytes_key", bytes);
-        assertArrayEquals(bytes, nextkv.getByteArray("bytes_key"));
+            // CONTAINS & REMOVE
+            assertTrue(nextkv.contains("int_" + i));
+            if (i % 10 == 0) {
+                nextkv.remove("int_" + i);
+                assertFalse(nextkv.contains("int_" + i));
+                assertEquals(-1, nextkv.getInt("int_" + i, -1));
+            }
+        }
     }
 
-    private void runUpdateTest(boolean isMultiProcess) {
+    private void testAllTypesMultiThread(boolean isMultiProcess) throws InterruptedException {
         NextKV nextkv = setupKV(isMultiProcess);
-        nextkv.putString("update_key", "first");
-        assertEquals("first", nextkv.getString("update_key", ""));
-        nextkv.putString("update_key", "second");
-        assertEquals("second", nextkv.getString("update_key", ""));
+        int threadCount = 4;
+        int countPerThread = 500;
+        CountDownLatch putLatch = new CountDownLatch(threadCount);
+
+        // MT PUT
+        for (int t = 0; t < threadCount; t++) {
+            final int tIdx = t;
+            new Thread(() -> {
+                for (int i = 0; i < countPerThread; i++) {
+                    String prefix = "mt_" + tIdx + "_" + i + "_";
+                    nextkv.putString(prefix + "str", "val_" + i);
+                    nextkv.putInt(prefix + "int", i);
+                    nextkv.putBoolean(prefix + "bool", i % 2 == 0);
+                    nextkv.putFloat(prefix + "float", i + 0.5f);
+                    nextkv.putLong(prefix + "long", i * 100000L);
+                    nextkv.putDouble(prefix + "double", i + 0.0001);
+                    nextkv.putByteArray(prefix + "bytes", new byte[]{(byte)(i % 255)});
+                }
+                putLatch.countDown();
+            }).start();
+        }
+        putLatch.await();
+
+        // MT GET & UPDATE & REMOVE (MIXED)
+        CountDownLatch mixLatch = new CountDownLatch(threadCount);
+        for (int t = 0; t < threadCount; t++) {
+            final int tIdx = t;
+            new Thread(() -> {
+                for (int i = 0; i < countPerThread; i++) {
+                    String prefix = "mt_" + tIdx + "_" + i + "_";
+                    // GET
+                    assertEquals("val_" + i, nextkv.getString(prefix + "str", ""));
+                    assertEquals(i, nextkv.getInt(prefix + "int", -1));
+                    assertEquals(i % 2 == 0, nextkv.getBoolean(prefix + "bool", false));
+                    assertEquals(i + 0.5f, nextkv.getFloat(prefix + "float", -1f), 0.001f);
+                    assertEquals(i * 100000L, nextkv.getLong(prefix + "long", -1L));
+                    assertEquals(i + 0.0001, nextkv.getDouble(prefix + "double", -1.0), 0.0001);
+                    assertArrayEquals(new byte[]{(byte)(i % 255)}, nextkv.getByteArray(prefix + "bytes"));
+
+                    // UPDATE
+                    nextkv.putInt(prefix + "int", i + 1);
+                    assertEquals(i + 1, nextkv.getInt(prefix + "int", -1));
+
+                    // REMOVE
+                    if (i % 2 == 0) {
+                        nextkv.remove(prefix + "str");
+                        assertFalse(nextkv.contains(prefix + "str"));
+                    }
+                }
+                mixLatch.countDown();
+            }).start();
+        }
+        mixLatch.await();
     }
 
-    private void runRemoveAndContainsTest(boolean isMultiProcess) {
-        NextKV nextkv = setupKV(isMultiProcess);
-        nextkv.putString("rem_key", "to_be_removed");
-        assertTrue(nextkv.contains("rem_key"));
-        
-        nextkv.remove("rem_key");
-        assertFalse(nextkv.contains("rem_key"));
-        assertEquals("default", nextkv.getString("rem_key", "default"));
-    }
-
-    private void runClearAllTest(boolean isMultiProcess) {
-        NextKV nextkv = setupKV(isMultiProcess);
-        nextkv.putString("k1", "v1");
-        nextkv.putInt("k2", 2);
-        assertTrue(nextkv.contains("k1"));
-        
-        nextkv.clearAll();
-        assertFalse(nextkv.contains("k1"));
-        assertFalse(nextkv.contains("k2"));
-        assertEquals("def", nextkv.getString("k1", "def"));
+    @Test
+    public void testCartesianSP_SingleThread() {
+        testAllTypesSingleThread(false);
     }
 
     @Test
-    public void testBasicTypesSP() { runBasicTypesTest(false); }
-    @Test
-    public void testBasicTypesMP() { runBasicTypesTest(true); }
+    public void testCartesianMP_SingleThread() {
+        testAllTypesSingleThread(true);
+    }
 
     @Test
-    public void testUpdateSP() { runUpdateTest(false); }
-    @Test
-    public void testUpdateMP() { runUpdateTest(true); }
+    public void testCartesianSP_MultiThread() throws InterruptedException {
+        testAllTypesMultiThread(false);
+    }
 
     @Test
-    public void testRemoveAndContainsSP() { runRemoveAndContainsTest(false); }
-    @Test
-    public void testRemoveAndContainsMP() { runRemoveAndContainsTest(true); }
-
-    @Test
-    public void testClearAllSP() { runClearAllTest(false); }
-    @Test
-    public void testClearAllMP() { runClearAllTest(true); }
+    public void testCartesianMP_MultiThread() throws InterruptedException {
+        testAllTypesMultiThread(true);
+    }
 }

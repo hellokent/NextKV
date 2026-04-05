@@ -15,23 +15,14 @@ import org.junit.Before;
 import java.io.File;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 
 @RunWith(AndroidJUnit4.class)
 public class ExampleInstrumentedTest {
     private static final String TAG = "KV_Benchmark";
-    private static final int WARMUP_ITERATIONS = 5000;
-    private static final int ITERATIONS = 5000; 
-    private static final int MIXED_ITERATIONS = 20000; 
+    private static final int ITERATIONS = 50000;
     
-    private String[] keysS;
-    private String[] keysI;
-    private String[] keysB;
-    private String[] keysF;
-    private String[] keysL;
-    private String[] keysD;
-    private String[] keysBytes;
-    private String[] keysMix;
-
+    private String[] keys;
     private String[] stringValues;
     private int[] intValues;
     private boolean[] boolValues;
@@ -40,50 +31,94 @@ public class ExampleInstrumentedTest {
     private double[] doubleValues;
     private byte[][] byteValues;
     private int[] opSequence;
+    private int[] typeSequence;
     private Context appContext;
+
+    private static final String[] TYPE_NAMES = {
+        "String", "Int", "Bool", "Float", "Long", "Double", "Bytes", "AllMixed"
+    };
+
+    interface Engine {
+        void put(int type, String key, int index);
+        void get(int type, String key, int index);
+        void remove(String key);
+        boolean contains(String key);
+        void clearAll();
+    }
+
+    class MMKVEngine implements Engine {
+        MMKV mmkv;
+        MMKVEngine(MMKV m) { this.mmkv = m; }
+        
+        @Override public void put(int type, String key, int index) {
+            if (type == 0) mmkv.encode(key, stringValues[index]);
+            else if (type == 1) mmkv.encode(key, intValues[index]);
+            else if (type == 2) mmkv.encode(key, boolValues[index]);
+            else if (type == 3) mmkv.encode(key, floatValues[index]);
+            else if (type == 4) mmkv.encode(key, longValues[index]);
+            else if (type == 5) mmkv.encode(key, doubleValues[index]);
+            else if (type == 6) mmkv.encode(key, byteValues[index]);
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) mmkv.decodeString(key, "");
+            else if (type == 1) mmkv.decodeInt(key, 0);
+            else if (type == 2) mmkv.decodeBool(key, false);
+            else if (type == 3) mmkv.decodeFloat(key, 0f);
+            else if (type == 4) mmkv.decodeLong(key, 0L);
+            else if (type == 5) mmkv.decodeDouble(key, 0.0);
+            else if (type == 6) mmkv.decodeBytes(key);
+        }
+        @Override public void remove(String key) { mmkv.removeValueForKey(key); }
+        @Override public boolean contains(String key) { return mmkv.containsKey(key); }
+        @Override public void clearAll() { mmkv.clearAll(); }
+    }
+
+    class NextKVEngine implements Engine {
+        NextKV nextkv;
+        NextKVEngine(NextKV n) { this.nextkv = n; }
+        
+        @Override public void put(int type, String key, int index) {
+            if (type == 0) nextkv.putString(key, stringValues[index]);
+            else if (type == 1) nextkv.putInt(key, intValues[index]);
+            else if (type == 2) nextkv.putBoolean(key, boolValues[index]);
+            else if (type == 3) nextkv.putFloat(key, floatValues[index]);
+            else if (type == 4) nextkv.putLong(key, longValues[index]);
+            else if (type == 5) nextkv.putDouble(key, doubleValues[index]);
+            else if (type == 6) nextkv.putByteArray(key, byteValues[index]);
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) nextkv.getStringFast(key, "");
+            else if (type == 1) nextkv.getInt(key, 0);
+            else if (type == 2) nextkv.getBoolean(key, false);
+            else if (type == 3) nextkv.getFloat(key, 0f);
+            else if (type == 4) nextkv.getLong(key, 0L);
+            else if (type == 5) nextkv.getDouble(key, 0.0);
+            else if (type == 6) nextkv.getByteArray(key);
+        }
+        @Override public void remove(String key) { nextkv.remove(key); }
+        @Override public boolean contains(String key) { return nextkv.contains(key); }
+        @Override public void clearAll() { nextkv.clearAll(); }
+    }
 
     @Before
     public void setup() {
         appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        
-        String mmkvPath = MMKV.initialize(appContext);
-        Log.i(TAG, "MMKV initialized at: " + mmkvPath);
+        MMKV.initialize(appContext);
 
-        // Keep the arrays smaller to prevent OOM. We reuse keys for MIXED_ITERATIONS
-        int maxLen = ITERATIONS; 
-        keysS = new String[maxLen];
-        keysI = new String[maxLen];
-        keysB = new String[maxLen];
-        keysF = new String[maxLen];
-        keysL = new String[maxLen];
-        keysD = new String[maxLen];
-        keysBytes = new String[maxLen];
-        keysMix = new String[maxLen];
-
-        stringValues = new String[maxLen];
-        intValues = new int[maxLen];
-        boolValues = new boolean[maxLen];
-        floatValues = new float[maxLen];
-        longValues = new long[maxLen];
-        doubleValues = new double[maxLen];
-        byteValues = new byte[maxLen][];
-        
-        // Operation sequence can be size of MIXED_ITERATIONS, it's just int array (2MB)
-        opSequence = new int[MIXED_ITERATIONS];
+        keys = new String[ITERATIONS];
+        stringValues = new String[ITERATIONS];
+        intValues = new int[ITERATIONS];
+        boolValues = new boolean[ITERATIONS];
+        floatValues = new float[ITERATIONS];
+        longValues = new long[ITERATIONS];
+        doubleValues = new double[ITERATIONS];
+        byteValues = new byte[ITERATIONS][];
+        opSequence = new int[ITERATIONS];
+        typeSequence = new int[ITERATIONS];
 
         Random random = new Random(42);
-        for (int i = 0; i < maxLen; i++) {
-            String baseKey = "key_" + i;
-            keysS[i] = baseKey + "_s";
-            keysI[i] = baseKey + "_i";
-            keysB[i] = baseKey + "_b";
-            keysF[i] = baseKey + "_f";
-            keysL[i] = baseKey + "_l";
-            keysD[i] = baseKey + "_d";
-            keysBytes[i] = baseKey + "_bytes";
-            // For mixed, we just use a pool of keys
-            keysMix[i] = "key_" + (i % 5000) + "_mix";
-
+        for (int i = 0; i < ITERATIONS; i++) {
+            keys[i] = "key_" + i;
             stringValues[i] = "val_" + UUID.randomUUID().toString();
             intValues[i] = random.nextInt();
             boolValues[i] = random.nextBoolean();
@@ -92,222 +127,137 @@ public class ExampleInstrumentedTest {
             doubleValues[i] = random.nextDouble();
             byteValues[i] = new byte[32];
             random.nextBytes(byteValues[i]);
-        }
-        
-        for (int i = 0; i < MIXED_ITERATIONS; i++) {
+            
             opSequence[i] = random.nextInt(4); // 0=Put, 1=Get, 2=Remove, 3=Contains
+            typeSequence[i] = random.nextInt(7); // 0..6
         }
     }
 
-    private void warmup(MMKV mmkv, NextKV nextkv) {
-        for (int i = 0; i < WARMUP_ITERATIONS; i++) {
-            String k = "warmup_" + i;
-            if (mmkv != null) {
-                mmkv.encode(k, 1);
-                mmkv.decodeInt(k, 0);
-            }
-            if (nextkv != null) {
-                nextkv.putInt(k, 1);
-                nextkv.getInt(k, 0);
-            }
-        }
-    }
-
-    private void runSuite(String modeName, MMKV mmkv, NextKV nextkv) {
-        Log.i(TAG, "==== WARMUP START [" + modeName + "] ====");
-        warmup(mmkv, nextkv);
-        Log.i(TAG, "==== WARMUP DONE [" + modeName + "] ====");
-
-        Log.i(TAG, "==== BENCHMARK START [" + modeName + "] ====");
+    private void runBenchmarkForType(String engineName, String processMode, Engine engine, int targetType) throws InterruptedException {
+        String typeName = TYPE_NAMES[targetType];
         
-        // 1. Put (All 7 Types)
+        // Single Thread PUT
+        engine.clearAll();
         long start = System.nanoTime();
         for (int i = 0; i < ITERATIONS; i++) {
-            if (mmkv != null) {
-                mmkv.encode(keysS[i], stringValues[i]);
-                mmkv.encode(keysI[i], intValues[i]);
-                mmkv.encode(keysB[i], boolValues[i]);
-                mmkv.encode(keysF[i], floatValues[i]);
-                mmkv.encode(keysL[i], longValues[i]);
-                mmkv.encode(keysD[i], doubleValues[i]);
-                mmkv.encode(keysBytes[i], byteValues[i]);
-            } else {
-                nextkv.putString(keysS[i], stringValues[i]);
-                nextkv.putInt(keysI[i], intValues[i]);
-                nextkv.putBoolean(keysB[i], boolValues[i]);
-                nextkv.putFloat(keysF[i], floatValues[i]);
-                nextkv.putLong(keysL[i], longValues[i]);
-                nextkv.putDouble(keysD[i], doubleValues[i]);
-                nextkv.putByteArray(keysBytes[i], byteValues[i]);
-            }
+            int t = (targetType == 7) ? typeSequence[i] : targetType;
+            engine.put(t, keys[i], i);
         }
-        long putTime = (System.nanoTime() - start) / 1000000;
-        Log.i(TAG, String.format("PUT (All 7 Types * %d): %s=%d ms", ITERATIONS, modeName, putTime));
+        long putST = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,ST,PUT,%d", engineName, processMode, typeName, putST));
 
-        // 2. Get (All 7 Types)
+        // Single Thread GET
         start = System.nanoTime();
         for (int i = 0; i < ITERATIONS; i++) {
-            if (mmkv != null) {
-                mmkv.decodeString(keysS[i], "");
-                mmkv.decodeInt(keysI[i], 0);
-                mmkv.decodeBool(keysB[i], false);
-                mmkv.decodeFloat(keysF[i], 0f);
-                mmkv.decodeLong(keysL[i], 0L);
-                mmkv.decodeDouble(keysD[i], 0.0);
-                mmkv.decodeBytes(keysBytes[i]);
-            } else {
-                nextkv.getStringFast(keysS[i], "");
-                nextkv.getInt(keysI[i], 0);
-                nextkv.getBoolean(keysB[i], false);
-                nextkv.getFloat(keysF[i], 0f);
-                nextkv.getLong(keysL[i], 0L);
-                nextkv.getDouble(keysD[i], 0.0);
-                nextkv.getByteArray(keysBytes[i]);
-            }
+            int t = (targetType == 7) ? typeSequence[i] : targetType;
+            engine.get(t, keys[i], i);
         }
-        long getTime = (System.nanoTime() - start) / 1000000;
-        Log.i(TAG, String.format("GET (All 7 Types * %d): %s=%d ms", ITERATIONS, modeName, getTime));
-        
-        // 3. Mixed Operations (Put / Get / Remove / Contains randomly)
+        long getST = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,ST,GET,%d", engineName, processMode, typeName, getST));
+
+        // Single Thread MIXED
         start = System.nanoTime();
-        for (int i = 0; i < MIXED_ITERATIONS; i++) {
+        for (int i = 0; i < ITERATIONS; i++) {
             int op = opSequence[i];
-            String k = keysMix[i % ITERATIONS]; 
-            if (mmkv != null) {
-                if (op == 0) mmkv.encode(k, stringValues[i % ITERATIONS]);
-                else if (op == 1) mmkv.decodeString(k, "");
-                else if (op == 2) mmkv.removeValueForKey(k);
-                else mmkv.containsKey(k);
-            } else {
-                if (op == 0) nextkv.putString(k, stringValues[i % ITERATIONS]);
-                else if (op == 1) nextkv.getStringFast(k, "");
-                else if (op == 2) nextkv.remove(k);
-                else nextkv.contains(k);
-            }
+            int t = (targetType == 7) ? typeSequence[i] : targetType;
+            if (op == 0) engine.put(t, keys[i], i);
+            else if (op == 1) engine.get(t, keys[i], i);
+            else if (op == 2) engine.remove(keys[i]);
+            else engine.contains(keys[i]);
         }
-        long mixedTime = (System.nanoTime() - start) / 1000000;
-        Log.i(TAG, String.format("MIXED (Put/Get/Upd/Cont/Rem * %d): %s=%d ms", MIXED_ITERATIONS, modeName, mixedTime));
-        
-        Log.i(TAG, "==== BENCHMARK DONE [" + modeName + "] ====");
-    }
+        long mixST = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,ST,MIXED,%d", engineName, processMode, typeName, mixST));
 
-    private void runConcurrentSuite(String modeName, MMKV mmkv, NextKV nextkv) throws InterruptedException {
-        Log.i(TAG, "==== CONCURRENT BENCHMARK START [" + modeName + "] ====");
-        int threadCount = 4;
-        int opsPerThread = MIXED_ITERATIONS / threadCount;
-        Thread[] threads = new Thread[threadCount];
-        
-        long start = System.nanoTime();
-        for (int t = 0; t < threadCount; t++) {
-            final int tIdx = t;
-            threads[t] = new Thread(() -> {
-                for (int i = tIdx * opsPerThread; i < (tIdx + 1) * opsPerThread; i++) {
-                    int op = opSequence[i];
-                    String k = keysMix[i % 1000]; // Tighter hot keys for contention
-                    if (mmkv != null) {
-                        if (op == 0) mmkv.encode(k, stringValues[i % ITERATIONS]);
-                        else if (op == 1) mmkv.decodeString(k, "");
-                        else if (op == 2) mmkv.removeValueForKey(k);
-                        else mmkv.containsKey(k);
-                    } else if (nextkv != null) {
-                        if (op == 0) nextkv.putString(k, stringValues[i % ITERATIONS]);
-                        else if (op == 1) nextkv.getStringFast(k, "");
-                        else if (op == 2) nextkv.remove(k);
-                        else nextkv.contains(k);
-                    }
+        // Multi Thread PUT
+        engine.clearAll();
+        int threads = 4;
+        CountDownLatch latch = new CountDownLatch(threads);
+        start = System.nanoTime();
+        for (int threadId = 0; threadId < threads; threadId++) {
+            final int tId = threadId;
+            new Thread(() -> {
+                for (int i = tId * (ITERATIONS / threads); i < (tId + 1) * (ITERATIONS / threads); i++) {
+                    int t = (targetType == 7) ? typeSequence[i] : targetType;
+                    engine.put(t, keys[i], i);
                 }
-            });
-            threads[t].start();
+                latch.countDown();
+            }).start();
         }
-        for (Thread thread : threads) {
-            thread.join();
+        latch.await();
+        long putMT = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,MT,PUT,%d", engineName, processMode, typeName, putMT));
+
+        // Multi Thread GET
+        CountDownLatch latch2 = new CountDownLatch(threads);
+        start = System.nanoTime();
+        for (int threadId = 0; threadId < threads; threadId++) {
+            final int tId = threadId;
+            new Thread(() -> {
+                for (int i = tId * (ITERATIONS / threads); i < (tId + 1) * (ITERATIONS / threads); i++) {
+                    int t = (targetType == 7) ? typeSequence[i] : targetType;
+                    engine.get(t, keys[i], i);
+                }
+                latch2.countDown();
+            }).start();
         }
-        long time = (System.nanoTime() - start) / 1000000;
-        Log.i(TAG, String.format("CONCURRENT MIXED (4 Threads, Total %d): %s=%d ms", MIXED_ITERATIONS, modeName, time));
-        Log.i(TAG, "==== CONCURRENT BENCHMARK DONE [" + modeName + "] ====");
-    }
+        latch2.await();
+        long getMT = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,MT,GET,%d", engineName, processMode, typeName, getMT));
 
-    private void runMixedProfileLoop(MMKV mmkv, NextKV nextkv, String modeName) {
-        warmup(MMKV.defaultMMKV(), new NextKV()); 
-        Log.i(TAG, "==== PROFILE LOOP START [" + modeName + "] ====");
-        long endTime = System.currentTimeMillis() + 10000; // Run for 10 seconds
-        long count = 0;
-        while (System.currentTimeMillis() < endTime) {
-            int i = (int) (count % MIXED_ITERATIONS);
-            int op = opSequence[i];
-            String k = keysMix[i % ITERATIONS]; 
-            if (mmkv != null) {
-                if (op == 0) mmkv.encode(k, stringValues[i % ITERATIONS]);
-                else if (op == 1) mmkv.decodeString(k, "");
-                else if (op == 2) mmkv.removeValueForKey(k);
-                else mmkv.containsKey(k);
-            } else if (nextkv != null) {
-                if (op == 0) nextkv.putString(k, stringValues[i % ITERATIONS]);
-                else if (op == 1) nextkv.getStringFast(k, "");
-                else if (op == 2) nextkv.remove(k);
-                else nextkv.contains(k);
-            }
-            count++;
+        // Multi Thread MIXED
+        CountDownLatch latch3 = new CountDownLatch(threads);
+        start = System.nanoTime();
+        for (int threadId = 0; threadId < threads; threadId++) {
+            final int tId = threadId;
+            new Thread(() -> {
+                for (int i = tId * (ITERATIONS / threads); i < (tId + 1) * (ITERATIONS / threads); i++) {
+                    int op = opSequence[i];
+                    int t = (targetType == 7) ? typeSequence[i] : targetType;
+                    if (op == 0) engine.put(t, keys[i], i);
+                    else if (op == 1) engine.get(t, keys[i], i);
+                    else if (op == 2) engine.remove(keys[i]);
+                    else engine.contains(keys[i]);
+                }
+                latch3.countDown();
+            }).start();
         }
-        Log.i(TAG, "==== PROFILE LOOP DONE [" + modeName + "] Total Ops: " + count + " ====");
+        latch3.await();
+        long mixMT = (System.nanoTime() - start) / 1000000;
+        Log.i(TAG, String.format("CSV: %s,%s,%s,MT,MIXED,%d", engineName, processMode, typeName, mixMT));
     }
 
-    @Test
-    public void profileMmkvSpMixed() {
-        MMKV mmkv = MMKV.mmkvWithID("prof_mmkv_sp", MMKV.SINGLE_PROCESS_MODE);
-        runMixedProfileLoop(mmkv, null, "MMKV_SP");
-    }
+    private void runFullSuite(String engineName, String processMode, Engine engine) throws InterruptedException {
+        // Warmup
+        engine.put(1, "warmup", 0);
+        engine.get(1, "warmup", 0);
 
-    @Test
-    public void profileNextkvSpMixed() {
-        File f = new File(appContext.getFilesDir(), "prof_nextkv_sp.data");
-        if (f.exists()) f.delete();
-        NextKV.init(f.getAbsolutePath(), false);
-        NextKV nextkv = new NextKV(false);
-        runMixedProfileLoop(null, nextkv, "NextKV_SP");
-    }
-
-    @Test
-    public void profileMmkvMpMixed() {
-        MMKV mmkv = MMKV.mmkvWithID("prof_mmkv_mp", MMKV.MULTI_PROCESS_MODE);
-        runMixedProfileLoop(mmkv, null, "MMKV_MP");
-    }
-
-    @Test
-    public void profileNextkvMpMixed() {
-        File f = new File(appContext.getFilesDir(), "prof_nextkv_mp.data");
-        if (f.exists()) f.delete();
-        NextKV.init(f.getAbsolutePath(), true);
-        NextKV nextkv = new NextKV(true);
-        runMixedProfileLoop(null, nextkv, "NextKV_MP");
+        for (int type = 0; type <= 7; type++) {
+            runBenchmarkForType(engineName, processMode, engine, type);
+        }
     }
 
     @Test
     public void benchmarkAll() throws InterruptedException {
         // --- Single Process Benchmark ---
-        File nextKvSpFile = new File(appContext.getFilesDir(), "nextkv_sp.data");
+        File nextKvSpFile = new File(appContext.getFilesDir(), "nextkv_sp_full.data");
         if (nextKvSpFile.exists()) nextKvSpFile.delete();
         NextKV.init(nextKvSpFile.getAbsolutePath(), false); // Single Process
         
-        MMKV mmkvSp = MMKV.mmkvWithID("sp", MMKV.SINGLE_PROCESS_MODE);
+        MMKV mmkvSp = MMKV.mmkvWithID("sp_full", MMKV.SINGLE_PROCESS_MODE);
         NextKV nextkvSp = new NextKV(false);
         
-        runSuite("MMKV_SP", mmkvSp, null);
-        runSuite("NextKV_SP", null, nextkvSp);
-        runConcurrentSuite("MMKV_SP", mmkvSp, null);
-        runConcurrentSuite("NextKV_SP", null, nextkvSp);
+        runFullSuite("MMKV", "SP", new MMKVEngine(mmkvSp));
+        runFullSuite("NextKV", "SP", new NextKVEngine(nextkvSp));
         
         // --- Multi Process Benchmark ---
-        File nextKvMpFile = new File(appContext.getFilesDir(), "nextkv_mp.data");
+        File nextKvMpFile = new File(appContext.getFilesDir(), "nextkv_mp_full.data");
         if (nextKvMpFile.exists()) nextKvMpFile.delete();
         NextKV.init(nextKvMpFile.getAbsolutePath(), true); // Multi Process
         
-        MMKV mmkvMp = MMKV.mmkvWithID("mp", MMKV.MULTI_PROCESS_MODE);
+        MMKV mmkvMp = MMKV.mmkvWithID("mp_full", MMKV.MULTI_PROCESS_MODE);
         NextKV nextkvMp = new NextKV(true);
         
-        runSuite("MMKV_MP", mmkvMp, null);
-        runSuite("NextKV_MP", null, nextkvMp);
-        runConcurrentSuite("MMKV_MP", mmkvMp, null);
-        runConcurrentSuite("NextKV_MP", null, nextkvMp);
+        runFullSuite("MMKV", "MP", new MMKVEngine(mmkvMp));
+        runFullSuite("NextKV", "MP", new NextKVEngine(nextkvMp));
     }
 }

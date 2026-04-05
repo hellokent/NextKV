@@ -210,6 +210,18 @@ Java_com_example_nextkv_NextKV_nativeGetSharedByteBuffer(JNIEnv* env, jobject th
 }
 
 extern "C" JNIEXPORT jlong JNICALL
+Java_com_example_nextkv_NextKV_nativeGetBaseAddress(JNIEnv* env, jobject thiz) {
+    if (!g_nextKV) return 0;
+    return reinterpret_cast<jlong>(g_nextKV->getMmapPtr());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_nextkv_NextKV_nativeGetSequence(JNIEnv* env, jobject thiz) {
+    if (!g_nextKV) return 0;
+    return static_cast<jint>(g_nextKV->getSequence());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
 Java_com_example_nextkv_NextKV_nativeGetRecordMeta(JNIEnv* env, jobject thiz, jstring key) {
     if (!g_nextKV) return 0;
     JStringU16View k(env, key);

@@ -6,7 +6,7 @@ TEST_RUNNER="$PKG.test/androidx.test.runner.AndroidJUnitRunner"
 PERF_DATA="/data/data/$PKG/perf.data"
 DURATION=10
 
-EVENTS="task-clock,cpu-cycles,instructions,cache-references,cache-misses,page-faults,minor-faults,major-faults,branch-loads,branch-load-misses"
+EVENTS="task-clock,cpu-cycles,instructions,cache-misses,page-faults,branch-misses,stalled-cycles-frontend,stalled-cycles-backend,L1-dcache-load-misses,L1-icache-load-misses"
 
 run_profile() {
     TEST_METHOD=$1

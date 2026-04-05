@@ -28,14 +28,11 @@ public class NextKV {
     private long mBaseAddress = 0;
     private Unsafe mUnsafe = null;
     private long mCharBaseOffset = 0;
+    private int mLocalSequence = -1;
 
     public NextKV(boolean isMultiProcess) {
         this.mIsMultiProcess = isMultiProcess;
-        if (!isMultiProcess) {
-            mCache = new java.util.concurrent.ConcurrentHashMap<>(8192);
-        } else {
-            mCache = null;
-        }
+        mCache = new java.util.concurrent.ConcurrentHashMap<>(8192);
         
         mRootBuffer = nativeGetSharedByteBuffer();
         if (mRootBuffer != null) {
@@ -53,16 +50,42 @@ public class NextKV {
                 // Silently fallback to ThreadLocal ByteBuffer
             }
         }
+        if (isMultiProcess) {
+            mLocalSequence = nativeGetSequence();
+        }
     }
 
     public NextKV() {
         this(false); // default SP
     }
 
+    private boolean checkSequence() {
+        if (!mIsMultiProcess) return true;
+        int seq = nativeGetSequence();
+        if (seq == mLocalSequence) {
+            return true;
+        }
+        mLocalSequence = seq;
+        if (mCache != null) mCache.clear();
+        return false;
+    }
+
+    private void updateSequence() {
+        if (mIsMultiProcess) {
+            mLocalSequence = nativeGetSequence();
+        }
+    }
+
     public static native void init(String path, boolean multiProcess);
 
     @FastNative
     private native ByteBuffer nativeGetSharedByteBuffer();
+
+    @FastNative
+    private native long nativeGetBaseAddress();
+
+    @FastNative
+    private native int nativeGetSequence();
 
     @FastNative
     private native long nativeGetRecordMeta(String key);
@@ -115,27 +138,28 @@ public class NextKV {
     // Wrappers with Java-level caching for Single Process mode
 
     public void putString(String key, String value) {
-        if (!mIsMultiProcess && mCache != null) {
+        if (mCache != null) {
             if (value == null) mCache.remove(key);
             else mCache.put(key, value);
         }
         nativePutString(key, value);
+        updateSequence();
     }
 
     public String getString(String key, String defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
+        if (checkSequence() && mCache != null) {
             Object obj = mCache.get(key);
             if (obj != null && obj instanceof String) return (String) obj;
         }
         String result = nativeGetString(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null && result != null) {
+        if (mCache != null && result != null) {
             mCache.put(key, result);
         }
         return result;
     }
 
     public String getStringFast(String key, String defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
+        if (checkSequence() && mCache != null) {
             Object obj = mCache.get(key);
             if (obj != null && obj instanceof String) return (String) obj;
         }
@@ -146,128 +170,122 @@ public class NextKV {
         int size = (int) (meta & 0xFFFFFFFFL);
         if (size == 0) return defaultValue;
         
-        ByteBuffer buffer = mThreadBuffer.get();
-        if (buffer == null) return defaultValue;
-        
-        buffer.limit(offset + size);
-        buffer.position(offset);
-        char[] chars = new char[size / 2];
-        buffer.asCharBuffer().get(chars);
-        String result = new String(chars);
+        String result;
+        long baseAddr = nativeGetBaseAddress();
+        if (mUnsafe != null && baseAddr != 0) {
+            char[] chars = new char[size / 2];
+            try {
+                mUnsafe.copyMemory(null, baseAddr + offset, chars, mCharBaseOffset, size);
+                result = new String(chars);
+            } catch (Throwable t) {
+                mUnsafe = null;
+                result = nativeGetString(key, defaultValue);
+            }
+        } else {
+            result = nativeGetString(key, defaultValue);
+        }
 
-        if (!mIsMultiProcess && mCache != null) {
+        if (mCache != null) {
             mCache.put(key, result);
         }
         return result;
     }
 
     public void putInt(String key, int value) {
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, value);
+        if (mCache != null) {
+            mCache.remove(key);
+        }
         nativePutInt(key, value);
+        updateSequence();
     }
 
     public int getInt(String key, int defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof Integer) return (Integer) obj;
-        }
-        int result = nativeGetInt(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, result);
-        return result;
+        return nativeGetInt(key, defaultValue);
     }
 
     public void putBoolean(String key, boolean value) {
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, value);
+        if (mCache != null) {
+            mCache.remove(key);
+        }
         nativePutBoolean(key, value);
+        updateSequence();
     }
 
     public boolean getBoolean(String key, boolean defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof Boolean) return (Boolean) obj;
-        }
-        boolean result = nativeGetBoolean(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, result);
-        return result;
+        return nativeGetBoolean(key, defaultValue);
     }
 
     public void putFloat(String key, float value) {
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, value);
+        if (mCache != null) {
+            mCache.remove(key);
+        }
         nativePutFloat(key, value);
+        updateSequence();
     }
 
     public float getFloat(String key, float defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof Float) return (Float) obj;
-        }
-        float result = nativeGetFloat(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, result);
-        return result;
+        return nativeGetFloat(key, defaultValue);
     }
 
     public void putLong(String key, long value) {
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, value);
+        if (mCache != null) {
+            mCache.remove(key);
+        }
         nativePutLong(key, value);
+        updateSequence();
     }
 
     public long getLong(String key, long defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof Long) return (Long) obj;
-        }
-        long result = nativeGetLong(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, result);
-        return result;
+        return nativeGetLong(key, defaultValue);
     }
 
     public void putDouble(String key, double value) {
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, value);
+        if (mCache != null) {
+            mCache.remove(key);
+        }
         nativePutDouble(key, value);
+        updateSequence();
     }
 
     public double getDouble(String key, double defaultValue) {
-        if (!mIsMultiProcess && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof Double) return (Double) obj;
-        }
-        double result = nativeGetDouble(key, defaultValue);
-        if (!mIsMultiProcess && mCache != null) mCache.put(key, result);
-        return result;
+        return nativeGetDouble(key, defaultValue);
     }
 
     public void putByteArray(String key, byte[] value) {
-        if (!mIsMultiProcess && mCache != null) {
+        if (mCache != null) {
             if (value == null) mCache.remove(key);
             else mCache.put(key, value);
         }
         nativePutByteArray(key, value);
+        updateSequence();
     }
 
     public byte[] getByteArray(String key) {
-        if (!mIsMultiProcess && mCache != null) {
+        if (checkSequence() && mCache != null) {
             Object obj = mCache.get(key);
             if (obj != null && obj instanceof byte[]) return (byte[]) obj;
         }
         byte[] result = nativeGetByteArray(key);
-        if (!mIsMultiProcess && mCache != null && result != null) {
+        if (mCache != null && result != null) {
             mCache.put(key, result);
         }
         return result;
     }
 
     public boolean contains(String key) {
-        if (!mIsMultiProcess && mCache != null && mCache.containsKey(key)) return true;
+        if (checkSequence() && mCache != null && mCache.containsKey(key)) return true;
         return nativeContains(key);
     }
 
     public void remove(String key) {
-        if (!mIsMultiProcess && mCache != null) mCache.remove(key);
+        if (mCache != null) mCache.remove(key);
         nativeRemove(key);
+        updateSequence();
     }
 
     public void clearAll() {
-        if (!mIsMultiProcess && mCache != null) mCache.clear();
+        if (mCache != null) mCache.clear();
         nativeClearAll();
+        updateSequence();
     }
 }
