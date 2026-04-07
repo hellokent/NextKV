@@ -40,14 +40,18 @@ NextKV has been rigorously tested in a 1,000,000-iteration Cartesian product ben
 ### 🖥️ Server Ecosystem - Go / Rust / C++ / Java
 *Test Device: Apple Silicon M-Series (ARM64 macOS) - 100,000 Iterations*
 
-| Ecosystem | Competitor | Engine | Multi-Thread MIXED | Single-Thread PUT | Single-Thread GET |
+| Ecosystem | Competitor | Competitor MT MIXED | NextKV MT MIXED | Competitor ST PUT (Int) | NextKV ST PUT (Int) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Golang** | BadgerDB / Bbolt | **NextKV (Cgo)** | **16 ms 👑** | **21 ms** | **18 ms** |
-| **Rust** | Sled / Redb | **NextKV (FFI)** | **22 ms** | **19 ms** | **13 ms 👑** |
-| **C/C++** | RocksDB / LMDB | **NextKV (Pure)** | **12 ms** | **11 ms** | **4 ms 👑** |
-| **Java** | MapDB / Xodus | **NextKV (JNI)** | **83 ms** | **110 ms** | **22 ms 👑** |
+| **Golang** | BadgerDB | 372 ms | **46 ms 👑** | 112 ms | **29 ms 👑** |
+| **Golang** | Bbolt | 1660 ms | **46 ms 👑** | 558 ms | **29 ms 👑** |
+| **Rust** | Sled | 36 ms | **30 ms 👑** | 168 ms | **25 ms 👑** |
+| **Rust** | Redb | 157 ms | **30 ms 👑** | 117 ms | **25 ms 👑** |
+| **C/C++** | RocksDB | 652 ms | **14 ms 👑** | 257 ms | **26 ms 👑** |
+| **C/C++** | LMDB | 727 ms | **14 ms 👑** | 725 ms | **26 ms 👑** |
+| **Java** | MapDB | 169 ms | **26 ms 👑** | 305 ms | **36 ms 👑** |
+| **Java** | Xodus | 1776 ms | **26 ms 👑** | 2622 ms | **36 ms 👑** |
 
-*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB (275ms) and RocksDB (100ms) in micro-cache state-machine scenarios.*
+*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB, RocksDB, and MapDB in micro-cache state-machine scenarios.*
 
 ---
 
