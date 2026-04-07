@@ -8,6 +8,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 
 import com.tencent.mmkv.MMKV;
 
+import io.fastkv.FastKV;
+import io.paperdb.Paper;
+import com.orhanobut.hawk.Hawk;
+import android.content.SharedPreferences;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.Before;
@@ -20,7 +24,7 @@ import java.util.concurrent.CountDownLatch;
 @RunWith(AndroidJUnit4.class)
 public class ExampleInstrumentedTest {
     private static final String TAG = "KV_Benchmark";
-    private static final int ITERATIONS = 50000;
+    private static final int ITERATIONS = 1000;
     
     private String[] keys;
     private String[] stringValues;
@@ -100,10 +104,119 @@ public class ExampleInstrumentedTest {
         @Override public void clearAll() { nextkv.clearAll(); }
     }
 
+    class FastKVEngine implements Engine {
+        FastKV fastkv;
+        FastKVEngine(FastKV f) { this.fastkv = f; }
+        
+        @Override public void put(int type, String key, int index) {
+            if (type == 0) fastkv.putString(key, stringValues[index]);
+            else if (type == 1) fastkv.putInt(key, intValues[index]);
+            else if (type == 2) fastkv.putBoolean(key, boolValues[index]);
+            else if (type == 3) fastkv.putFloat(key, floatValues[index]);
+            else if (type == 4) fastkv.putLong(key, longValues[index]);
+            else if (type == 5) fastkv.putDouble(key, doubleValues[index]);
+            else if (type == 6) fastkv.putArray(key, byteValues[index]);
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) fastkv.getString(key, "");
+            else if (type == 1) fastkv.getInt(key, 0);
+            else if (type == 2) fastkv.getBoolean(key, false);
+            else if (type == 3) fastkv.getFloat(key, 0f);
+            else if (type == 4) fastkv.getLong(key, 0L);
+            else if (type == 5) fastkv.getDouble(key, 0.0);
+            else if (type == 6) fastkv.getArray(key);
+        }
+        @Override public void remove(String key) { fastkv.remove(key); }
+        @Override public boolean contains(String key) { return fastkv.contains(key); }
+        @Override public void clearAll() { fastkv.clear(); }
+    }
+
+    class SharedPreferencesEngine implements Engine {
+        SharedPreferences sp;
+        SharedPreferencesEngine(SharedPreferences sp) { this.sp = sp; }
+        
+        @Override public void put(int type, String key, int index) {
+            SharedPreferences.Editor editor = sp.edit();
+            if (type == 0) editor.putString(key, stringValues[index]);
+            else if (type == 1) editor.putInt(key, intValues[index]);
+            else if (type == 2) editor.putBoolean(key, boolValues[index]);
+            else if (type == 3) editor.putFloat(key, floatValues[index]);
+            else if (type == 4) editor.putLong(key, longValues[index]);
+            else if (type == 5) editor.putString(key, String.valueOf(doubleValues[index]));
+            else if (type == 6) editor.putString(key, android.util.Base64.encodeToString(byteValues[index], android.util.Base64.DEFAULT));
+            editor.commit();
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) sp.getString(key, "");
+            else if (type == 1) sp.getInt(key, 0);
+            else if (type == 2) sp.getBoolean(key, false);
+            else if (type == 3) sp.getFloat(key, 0f);
+            else if (type == 4) sp.getLong(key, 0L);
+            else if (type == 5) Double.parseDouble(sp.getString(key, "0.0"));
+            else if (type == 6) android.util.Base64.decode(sp.getString(key, ""), android.util.Base64.DEFAULT);
+        }
+        @Override public void remove(String key) { sp.edit().remove(key).commit(); }
+        @Override public boolean contains(String key) { return sp.contains(key); }
+        @Override public void clearAll() { sp.edit().clear().commit(); }
+    }
+
+    class PaperEngine implements Engine {
+        String bookName;
+        PaperEngine(String bookName) { this.bookName = bookName; }
+        
+        @Override public void put(int type, String key, int index) {
+            if (type == 0) Paper.book(bookName).write(key, stringValues[index]);
+            else if (type == 1) Paper.book(bookName).write(key, intValues[index]);
+            else if (type == 2) Paper.book(bookName).write(key, boolValues[index]);
+            else if (type == 3) Paper.book(bookName).write(key, floatValues[index]);
+            else if (type == 4) Paper.book(bookName).write(key, longValues[index]);
+            else if (type == 5) Paper.book(bookName).write(key, doubleValues[index]);
+            else if (type == 6) Paper.book(bookName).write(key, byteValues[index]);
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) Paper.book(bookName).read(key, "");
+            else if (type == 1) Paper.book(bookName).read(key, 0);
+            else if (type == 2) Paper.book(bookName).read(key, false);
+            else if (type == 3) Paper.book(bookName).read(key, 0f);
+            else if (type == 4) Paper.book(bookName).read(key, 0L);
+            else if (type == 5) Paper.book(bookName).read(key, 0.0);
+            else if (type == 6) Paper.book(bookName).read(key, new byte[0]);
+        }
+        @Override public void remove(String key) { Paper.book(bookName).delete(key); }
+        @Override public boolean contains(String key) { return Paper.book(bookName).contains(key); }
+        @Override public void clearAll() { Paper.book(bookName).destroy(); }
+    }
+
+    class HawkEngine implements Engine {
+        @Override public void put(int type, String key, int index) {
+            if (type == 0) Hawk.put(key, stringValues[index]);
+            else if (type == 1) Hawk.put(key, intValues[index]);
+            else if (type == 2) Hawk.put(key, boolValues[index]);
+            else if (type == 3) Hawk.put(key, floatValues[index]);
+            else if (type == 4) Hawk.put(key, longValues[index]);
+            else if (type == 5) Hawk.put(key, doubleValues[index]);
+            else if (type == 6) Hawk.put(key, byteValues[index]);
+        }
+        @Override public void get(int type, String key, int index) {
+            if (type == 0) Hawk.get(key, "");
+            else if (type == 1) Hawk.get(key, 0);
+            else if (type == 2) Hawk.get(key, false);
+            else if (type == 3) Hawk.get(key, 0f);
+            else if (type == 4) Hawk.get(key, 0L);
+            else if (type == 5) Hawk.get(key, 0.0);
+            else if (type == 6) Hawk.get(key, new byte[0]);
+        }
+        @Override public void remove(String key) { Hawk.delete(key); }
+        @Override public boolean contains(String key) { return Hawk.contains(key); }
+        @Override public void clearAll() { Hawk.deleteAll(); }
+    }
+
     @Before
     public void setup() {
         appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MMKV.initialize(appContext);
+        Paper.init(appContext);
+        Hawk.init(appContext).build();
 
         keys = new String[ITERATIONS];
         stringValues = new String[ITERATIONS];
@@ -245,9 +358,15 @@ public class ExampleInstrumentedTest {
         
         MMKV mmkvSp = MMKV.mmkvWithID("sp_full", MMKV.SINGLE_PROCESS_MODE);
         NextKV nextkvSp = new NextKV(false);
+        FastKV fastkvSp = new FastKV.Builder(appContext.getFilesDir().getAbsolutePath(), "fastkv_sp_full").build();
+        SharedPreferences sp = appContext.getSharedPreferences("sp_full", Context.MODE_PRIVATE);
         
         runFullSuite("MMKV", "SP", new MMKVEngine(mmkvSp));
         runFullSuite("NextKV", "SP", new NextKVEngine(nextkvSp));
+        runFullSuite("FastKV", "SP", new FastKVEngine(fastkvSp));
+        runFullSuite("SharedPrefs", "SP", new SharedPreferencesEngine(sp));
+        runFullSuite("Hawk", "SP", new HawkEngine());
+        runFullSuite("Paper", "SP", new PaperEngine("paper_sp"));
         
         // --- Multi Process Benchmark ---
         File nextKvMpFile = new File(appContext.getFilesDir(), "nextkv_mp_full.data");
@@ -256,8 +375,10 @@ public class ExampleInstrumentedTest {
         
         MMKV mmkvMp = MMKV.mmkvWithID("mp_full", MMKV.MULTI_PROCESS_MODE);
         NextKV nextkvMp = new NextKV(true);
+        FastKV fastkvMp = new FastKV.Builder(appContext.getFilesDir().getAbsolutePath(), "fastkv_mp_full").build();
         
         runFullSuite("MMKV", "MP", new MMKVEngine(mmkvMp));
         runFullSuite("NextKV", "MP", new NextKVEngine(nextkvMp));
+        runFullSuite("FastKV", "MP", new FastKVEngine(fastkvMp));
     }
 }

@@ -58,7 +58,7 @@ private:
         uint32_t magic;
         uint32_t currentOffset;
         uint32_t sequence;
-        uint32_t processLock;
+        uint32_t crc32;
     };
 
     std::string m_path;

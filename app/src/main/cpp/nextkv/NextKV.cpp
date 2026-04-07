@@ -4,14 +4,23 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+
+#ifdef __ANDROID__
 #include <android/log.h>
+#else
+#include <cstdio>
+#endif
 
 #if defined(__aarch64__) || defined(__arm__)
 #include <arm_acle.h>
 #endif
 
+#ifdef __ANDROID__
 #define LOG_TAG "NextKV_Native"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#else
+#define LOGE(...) { printf("NextKV ERROR: "); printf(__VA_ARGS__); printf("\n"); }
+#endif
 
 const size_t INITIAL_CAPACITY = 4096; // 4KB
 const uint32_t TOMBSTONE_MAGIC = 0xffffffff;
@@ -54,6 +63,37 @@ static inline uint32_t fast_hash(std::u16string_view key) {
     }
 #else
     hash = 2166136261u;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= 16777619;
+    }
+#endif
+    return hash;
+}
+
+static inline uint32_t fast_hash_buffer(const uint8_t* data, size_t len) {
+    uint32_t hash = 2166136261u;
+#if defined(__aarch64__)
+    while (len >= 8) {
+        uint64_t chunk;
+        memcpy(&chunk, data, 8);
+        hash = __crc32cd(hash, chunk);
+        data += 8;
+        len -= 8;
+    }
+    while (len >= 4) {
+        uint32_t chunk;
+        memcpy(&chunk, data, 4);
+        hash = __crc32cw(hash, chunk);
+        data += 4;
+        len -= 4;
+    }
+    while (len > 0) {
+        hash = __crc32ch(hash, *data);
+        data++;
+        len--;
+    }
+#else
     for (size_t i = 0; i < len; ++i) {
         hash ^= data[i];
         hash *= 16777619;
@@ -155,11 +195,15 @@ inline void NextKV::lockWriteImpl() {
         cpu_relax();
     }
     if constexpr (MP) {
+        if (m_fd >= 0) {
+            struct flock lock = {};
+            lock.l_type = F_WRLCK;
+            lock.l_whence = SEEK_SET;
+            lock.l_start = 0;
+            lock.l_len = 1;
+            while (fcntl(m_fd, F_SETLKW, &lock) < 0 && errno == EINTR);
+        }
         if (m_mmapPtr) {
-            FileHeader* header = reinterpret_cast<FileHeader*>(m_mmapPtr);
-            while (__atomic_test_and_set(&header->processLock, __ATOMIC_ACQUIRE)) {
-                cpu_relax();
-            }
             recoverDelta();
         }
     }
@@ -172,8 +216,15 @@ inline void NextKV::unlockWriteImpl() {
         header->currentOffset = m_localOffset;
         header->sequence++;
         m_localSequence = header->sequence;
-        if constexpr (MP) {
-            __atomic_clear(&header->processLock, __ATOMIC_RELEASE);
+    }
+    if constexpr (MP) {
+        if (m_fd >= 0) {
+            struct flock lock = {};
+            lock.l_type = F_UNLCK;
+            lock.l_whence = SEEK_SET;
+            lock.l_start = 0;
+            lock.l_len = 1;
+            fcntl(m_fd, F_SETLK, &lock);
         }
     }
     m_threadLock.clear(std::memory_order_release);
@@ -188,12 +239,24 @@ inline void NextKV::lockReadImpl() {
         if (m_mmapPtr) {
             FileHeader* header = reinterpret_cast<FileHeader*>(m_mmapPtr);
             if (header->sequence != m_localSequence) {
-                while (__atomic_test_and_set(&header->processLock, __ATOMIC_ACQUIRE)) {
-                    cpu_relax();
+                if (m_fd >= 0) {
+                    struct flock lock = {};
+                    lock.l_type = F_RDLCK;
+                    lock.l_whence = SEEK_SET;
+                    lock.l_start = 0;
+                    lock.l_len = 1;
+                    while (fcntl(m_fd, F_SETLKW, &lock) < 0 && errno == EINTR);
                 }
                 recoverDelta();
                 m_localSequence = header->sequence;
-                __atomic_clear(&header->processLock, __ATOMIC_RELEASE);
+                if (m_fd >= 0) {
+                    struct flock lock = {};
+                    lock.l_type = F_UNLCK;
+                    lock.l_whence = SEEK_SET;
+                    lock.l_start = 0;
+                    lock.l_len = 1;
+                    fcntl(m_fd, F_SETLK, &lock);
+                }
             }
         }
     }
@@ -211,7 +274,7 @@ void NextKV::recoverDelta() {
         header->magic = NKV_MAGIC;
         header->currentOffset = sizeof(FileHeader);
         header->sequence = 1;
-        header->processLock = 0;
+        header->crc32 = 0;
         m_localOffset = sizeof(FileHeader);
         m_localSequence = 1;
         return;
@@ -232,7 +295,7 @@ void NextKV::recoverDelta() {
     if (targetOffset <= m_localOffset) return;
     
     size_t offset = m_localOffset;
-    while (offset + 6 <= targetOffset && offset + 6 <= m_capacity) {
+    while (offset + 8 <= targetOffset && offset + 8 <= m_capacity) {
         uint16_t keyId;
         memcpy(&keyId, m_mmapPtr + offset, 2);
         if (keyId == 0) break;
@@ -242,16 +305,16 @@ void NextKV::recoverDelta() {
         
         if (size == 0x7FFFFFFF) {
             uint16_t keyBytes;
-            memcpy(&keyBytes, m_mmapPtr + offset + 6, 2);
-            if (offset + 8 + keyBytes <= m_capacity) {
+            memcpy(&keyBytes, m_mmapPtr + offset + 8, 2);
+            if (offset + 10 + keyBytes <= m_capacity) {
                 if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
                 if (keyId >= m_nextKeyId) m_nextKeyId = keyId + 1;
                 
-                if (dictGet(std::u16string_view((char16_t*)(m_mmapPtr + offset + 8), keyBytes / 2)) == 0) {
-                    m_keyStore.emplace_back(std::u16string((char16_t*)(m_mmapPtr + offset + 8), keyBytes / 2));
+                if (dictGet(std::u16string_view((char16_t*)(m_mmapPtr + offset + 10), keyBytes / 2)) == 0) {
+                    m_keyStore.emplace_back(std::u16string((char16_t*)(m_mmapPtr + offset + 10), keyBytes / 2));
                     dictPut(m_keyStore.back(), keyId);
                 }
-                offset += 8 + keyBytes;
+                offset += 10 + keyBytes;
             } else {
                 break;
             }
@@ -261,21 +324,39 @@ void NextKV::recoverDelta() {
         bool isTombstone = (size & 0x80000000) != 0;
         uint32_t payloadSize = size & 0x7FFFFFFF;
         
+        uint16_t recordCrc;
+        memcpy(&recordCrc, m_mmapPtr + offset + 6, 2);
+        
+        if (!isTombstone && payloadSize > 0) {
+            if (offset + 8 + payloadSize > m_capacity) break;
+            uint16_t actualCrc = fast_hash_buffer(m_mmapPtr + offset + 8, payloadSize) & 0xFFFF;
+            if (actualCrc != recordCrc) {
+                // CRC Mismatch, skip this record and stop recovery safely
+                LOGE("NextKV: CRC mismatch for keyId %d, payload size %d", keyId, payloadSize);
+                if (offset + 8 + payloadSize <= targetOffset) {
+                    offset += 8 + payloadSize;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+        
         if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
         
         if (isTombstone) {
             if (m_memTable[keyId].offset != 0 && !(m_memTable[keyId].size & 0x80000000)) {
                 freeSpace(m_memTable[keyId].offset, m_memTable[keyId].size & 0x7FFFFFFF);
             }
-            m_memTable[keyId] = { (uint32_t)(offset + 6), size };
-            freeSpace(offset + 6, payloadSize);
+            m_memTable[keyId] = { (uint32_t)(offset + 8), size };
+            freeSpace(offset + 8, payloadSize);
         } else {
             if (m_memTable[keyId].offset != 0 && !(m_memTable[keyId].size & 0x80000000)) {
                 freeSpace(m_memTable[keyId].offset, m_memTable[keyId].size & 0x7FFFFFFF);
             }
-            m_memTable[keyId] = { (uint32_t)(offset + 6), payloadSize };
+            m_memTable[keyId] = { (uint32_t)(offset + 8), payloadSize };
         }
-        offset += 6 + payloadSize;
+        offset += 8 + payloadSize;
         if (keyId >= m_nextKeyId) m_nextKeyId = keyId + 1;
     }
     m_localOffset = offset;
@@ -289,14 +370,15 @@ void NextKV::recoverAll() {
 
 void NextKV::writeKeyDefinition(uint16_t keyId, std::u16string_view key) {
     uint32_t keyBytes = key.size() * 2;
-    uint32_t sizeNeeded = 6 + 2 + keyBytes; // keyId(2) + size(4) + keyLen(2) + key
+    uint32_t sizeNeeded = 8 + 2 + keyBytes; // keyId(2) + size(4) + keyLen(2) + key
     ensureCapacity(sizeNeeded);
     uint32_t offset = m_localOffset;
     
     *(uint16_t*)(m_mmapPtr + offset) = keyId;
     *(uint32_t*)(m_mmapPtr + offset + 2) = 0x7FFFFFFF;
-    *(uint16_t*)(m_mmapPtr + offset + 6) = (uint16_t)keyBytes;
-    memcpy(m_mmapPtr + offset + 8, key.data(), keyBytes);
+    *(uint16_t*)(m_mmapPtr + offset + 6) = 0;
+    *(uint16_t*)(m_mmapPtr + offset + 8) = (uint16_t)keyBytes;
+    memcpy(m_mmapPtr + offset + 10, key.data(), keyBytes);
     
     m_localOffset += sizeNeeded;
 }
@@ -333,12 +415,12 @@ void NextKV::ensureCapacity(size_t sizeNeeded) {
 
 void NextKV::freeSpace(uint32_t offset, uint32_t size) {
     if (size > 0 && size != TOMBSTONE_MAGIC && size < 0x80000000) {
-        m_freeBlocks[size].push_back(offset - 6);
+        m_freeBlocks[size].push_back(offset - 8);
     }
 }
 
 uint32_t NextKV::allocateSpace(uint32_t size) {
-    uint32_t requiredTotal = 6 + size;
+    uint32_t requiredTotal = 8 + size;
     auto it = m_freeBlocks.lower_bound(size);
     if (it != m_freeBlocks.end()) {
         std::vector<uint32_t>& offsets = it->second;
@@ -407,9 +489,13 @@ inline void NextKV::putStringCore(std::u16string_view key, std::u16string_view v
             uint32_t oldCap = oldDp.size & 0x7FFFFFFF;
             if (oldDp.offset != 0 && size <= oldCap) {
                 uint32_t newSize = size;
-                *(uint32_t*)(m_mmapPtr + oldDp.offset - 4) = newSize;
+                *(uint32_t*)(m_mmapPtr + oldDp.offset - 6) = newSize;
                 if (size > 0) {
+                    uint16_t crc = fast_hash_buffer((const uint8_t*)value.data(), size) & 0xFFFF;
+                    *(uint16_t*)(m_mmapPtr + oldDp.offset - 2) = crc;
                     memcpy(m_mmapPtr + oldDp.offset, value.data(), size);
+                } else {
+                    *(uint16_t*)(m_mmapPtr + oldDp.offset - 2) = 0;
                 }
                 m_memTable[keyId] = { oldDp.offset, size };
                 unlockWriteImpl<MP>();
@@ -424,11 +510,15 @@ inline void NextKV::putStringCore(std::u16string_view key, std::u16string_view v
     *(uint16_t*)(m_mmapPtr + offset) = keyId;
     *(uint32_t*)(m_mmapPtr + offset + 2) = size;
     if (size > 0) {
-        memcpy(m_mmapPtr + offset + 6, value.data(), size);
+        uint16_t crc = fast_hash_buffer((const uint8_t*)value.data(), size) & 0xFFFF;
+        *(uint16_t*)(m_mmapPtr + offset + 6) = crc;
+        memcpy(m_mmapPtr + offset + 8, value.data(), size);
+    } else {
+        *(uint16_t*)(m_mmapPtr + offset + 6) = 0;
     }
     
     if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
-    m_memTable[keyId] = { offset + 6, size };
+    m_memTable[keyId] = { offset + 8, size };
     unlockWriteImpl<MP>();
 }
 
@@ -471,6 +561,8 @@ inline void NextKV::putPrimitiveCore(std::u16string_view key, T value) {
             uint32_t oldCap = oldDp.size & 0x7FFFFFFF;
             if (oldDp.offset != 0 && size == oldCap) {
                 *(T*)(m_mmapPtr + oldDp.offset) = value;
+                uint16_t crc = fast_hash_buffer((const uint8_t*)&value, size) & 0xFFFF;
+                *(uint16_t*)(m_mmapPtr + oldDp.offset - 2) = crc;
                 unlockWriteImpl<MP>();
                 return;
             } else if (oldDp.offset != 0 && !(oldDp.size & 0x80000000)) {
@@ -482,10 +574,12 @@ inline void NextKV::putPrimitiveCore(std::u16string_view key, T value) {
     uint32_t offset = allocateSpace(size);
     *(uint16_t*)(m_mmapPtr + offset) = keyId;
     *(uint32_t*)(m_mmapPtr + offset + 2) = size;
-    *(T*)(m_mmapPtr + offset + 6) = value;
+    uint16_t crc = fast_hash_buffer((const uint8_t*)&value, size) & 0xFFFF;
+    *(uint16_t*)(m_mmapPtr + offset + 6) = crc;
+    *(T*)(m_mmapPtr + offset + 8) = value;
     
     if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
-    m_memTable[keyId] = { offset + 6, size };
+    m_memTable[keyId] = { offset + 8, size };
     unlockWriteImpl<MP>();
 }
 
@@ -625,11 +719,15 @@ inline void NextKV::putByteArrayCore(std::u16string_view key, const uint8_t* val
         if (!isNew && keyId < m_memTable.size()) {
             DataPointer oldDp = m_memTable[keyId];
             uint32_t oldCap = oldDp.size & 0x7FFFFFFF;
-            if (oldDp.offset != 0 && size == oldCap) {
+            if (oldDp.offset != 0 && size <= oldCap) {
                 uint32_t newSize = size;
-                memcpy(m_mmapPtr + oldDp.offset - 4, &newSize, 4);
+                *(uint32_t*)(m_mmapPtr + oldDp.offset - 6) = newSize;
                 if (value && size > 0) {
+                    uint16_t crc = fast_hash_buffer(value, size) & 0xFFFF;
+                    *(uint16_t*)(m_mmapPtr + oldDp.offset - 2) = crc;
                     memcpy(m_mmapPtr + oldDp.offset, value, size);
+                } else {
+                    *(uint16_t*)(m_mmapPtr + oldDp.offset - 2) = 0;
                 }
                 m_memTable[keyId] = { oldDp.offset, size };
                 unlockWriteImpl<MP>();
@@ -641,13 +739,17 @@ inline void NextKV::putByteArrayCore(std::u16string_view key, const uint8_t* val
     }
 
     uint32_t offset = allocateSpace(size);
-    memcpy(m_mmapPtr + offset, &keyId, 2);
-    memcpy(m_mmapPtr + offset + 2, &size, 4);
+    *(uint16_t*)(m_mmapPtr + offset) = keyId;
+    *(uint32_t*)(m_mmapPtr + offset + 2) = size;
     if (value && length > 0) {
-        memcpy(m_mmapPtr + offset + 6, value, size);
+        uint16_t crc = fast_hash_buffer(value, size) & 0xFFFF;
+        *(uint16_t*)(m_mmapPtr + offset + 6) = crc;
+        memcpy(m_mmapPtr + offset + 8, value, size);
+    } else {
+        *(uint16_t*)(m_mmapPtr + offset + 6) = 0;
     }
     if (keyId >= m_memTable.size()) m_memTable.resize(keyId + 1024);
-    m_memTable[keyId] = { offset + 6, size };
+    m_memTable[keyId] = { offset + 8, size };
     unlockWriteImpl<MP>();
 }
 

@@ -7,6 +7,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.junit.AfterClass;
+
 import java.io.File;
 import java.util.Random;
 import java.util.UUID;
@@ -16,6 +18,13 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class NextKVUnitTest {
+
+    @AfterClass
+    public static void dumpCppCoverage() {
+        Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File coverageFile = new File(appContext.getFilesDir(), "cpp_coverage.profraw");
+        NextKV.nativeDumpCoverage(coverageFile.getAbsolutePath());
+    }
 
     private NextKV setupKV(boolean isMultiProcess) {
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();

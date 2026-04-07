@@ -227,3 +227,18 @@ Java_com_example_nextkv_NextKV_nativeGetRecordMeta(JNIEnv* env, jobject thiz, js
     JStringU16View k(env, key);
     return g_nextKV->getRecordMeta(k.view());
 }
+
+extern "C" {
+    extern void __llvm_profile_set_filename(const char*);
+    extern int __llvm_profile_write_file();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_nextkv_NextKV_nativeDumpCoverage(JNIEnv* env, jclass clazz, jstring path) {
+#if defined(__clang__)
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    __llvm_profile_set_filename(pathStr);
+    __llvm_profile_write_file();
+    env->ReleaseStringUTFChars(path, pathStr);
+#endif
+}

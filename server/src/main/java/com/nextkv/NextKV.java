@@ -1,10 +1,10 @@
-package com.example.nextkv;
+package com.nextkv;
 
-import dalvik.annotation.optimization.FastNative;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.lang.reflect.Field;
 import sun.misc.Unsafe;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class NextKV {
     static {
@@ -12,7 +12,7 @@ public class NextKV {
     }
 
     private final boolean mIsMultiProcess;
-    private final java.util.concurrent.ConcurrentHashMap<String, Object> mCache;
+    private final ConcurrentHashMap<String, Object> mCache;
     
     private ByteBuffer mRootBuffer;
     private final ThreadLocal<ByteBuffer> mThreadBuffer = new ThreadLocal<ByteBuffer>() {
@@ -32,7 +32,7 @@ public class NextKV {
 
     public NextKV(boolean isMultiProcess) {
         this.mIsMultiProcess = isMultiProcess;
-        mCache = new java.util.concurrent.ConcurrentHashMap<>(8192);
+        mCache = new ConcurrentHashMap<>(8192);
         
         mRootBuffer = nativeGetSharedByteBuffer();
         if (mRootBuffer != null) {
@@ -78,63 +78,37 @@ public class NextKV {
 
     public static native void init(String path, boolean multiProcess);
 
-    @FastNative
     private native ByteBuffer nativeGetSharedByteBuffer();
-
-    @FastNative
     private native long nativeGetBaseAddress();
-
-    @FastNative
     private native int nativeGetSequence();
-
-    @FastNative
     private native long nativeGetRecordMeta(String key);
 
-    @FastNative
     private native void nativePutString(String key, String value);
-    @FastNative
     private native String nativeGetString(String key, String defaultValue);
 
-    @FastNative
     private native void nativePutInt(String key, int value);
-    @FastNative
     private native int nativeGetInt(String key, int defaultValue);
 
-    @FastNative
     private native void nativePutBoolean(String key, boolean value);
-    @FastNative
     private native boolean nativeGetBoolean(String key, boolean defaultValue);
 
-    @FastNative
     private native void nativePutFloat(String key, float value);
-    @FastNative
     private native float nativeGetFloat(String key, float defaultValue);
 
-    @FastNative
     private native void nativePutLong(String key, long value);
-    @FastNative
     private native long nativeGetLong(String key, long defaultValue);
 
-    @FastNative
     private native void nativePutDouble(String key, double value);
-    @FastNative
     private native double nativeGetDouble(String key, double defaultValue);
 
-    @FastNative
     private native void nativePutByteArray(String key, byte[] value);
-    @FastNative
     private native byte[] nativeGetByteArray(String key);
 
-    @FastNative
     private native boolean nativeContains(String key);
-
-    @FastNative
     private native void nativeRemove(String key);
-
-    @FastNative
     private native void nativeClearAll();
 
-    // Wrappers with Java-level caching for Single Process mode
+    // API Methods
 
     public void putString(String key, String value) {
         if (mCache != null) {
@@ -146,18 +120,6 @@ public class NextKV {
     }
 
     public String getString(String key, String defaultValue) {
-        if (checkSequence() && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof String) return (String) obj;
-        }
-        String result = nativeGetString(key, defaultValue);
-        if (mCache != null && result != null) {
-            mCache.put(key, result);
-        }
-        return result;
-    }
-
-    public String getStringFast(String key, String defaultValue) {
         if (checkSequence() && mCache != null) {
             Object obj = mCache.get(key);
             if (obj != null && obj instanceof String) return (String) obj;
@@ -191,9 +153,7 @@ public class NextKV {
     }
 
     public void putInt(String key, int value) {
-        if (mCache != null) {
-            mCache.remove(key);
-        }
+        if (mCache != null) mCache.remove(key);
         nativePutInt(key, value);
         updateSequence();
     }
@@ -203,9 +163,7 @@ public class NextKV {
     }
 
     public void putBoolean(String key, boolean value) {
-        if (mCache != null) {
-            mCache.remove(key);
-        }
+        if (mCache != null) mCache.remove(key);
         nativePutBoolean(key, value);
         updateSequence();
     }
@@ -215,9 +173,7 @@ public class NextKV {
     }
 
     public void putFloat(String key, float value) {
-        if (mCache != null) {
-            mCache.remove(key);
-        }
+        if (mCache != null) mCache.remove(key);
         nativePutFloat(key, value);
         updateSequence();
     }
@@ -227,9 +183,7 @@ public class NextKV {
     }
 
     public void putLong(String key, long value) {
-        if (mCache != null) {
-            mCache.remove(key);
-        }
+        if (mCache != null) mCache.remove(key);
         nativePutLong(key, value);
         updateSequence();
     }
@@ -239,9 +193,7 @@ public class NextKV {
     }
 
     public void putDouble(String key, double value) {
-        if (mCache != null) {
-            mCache.remove(key);
-        }
+        if (mCache != null) mCache.remove(key);
         nativePutDouble(key, value);
         updateSequence();
     }
@@ -253,26 +205,17 @@ public class NextKV {
     public void putByteArray(String key, byte[] value) {
         if (mCache != null) {
             if (value == null) mCache.remove(key);
-            else mCache.put(key, value);
+            else mCache.remove(key);
         }
         nativePutByteArray(key, value);
         updateSequence();
     }
 
     public byte[] getByteArray(String key) {
-        if (checkSequence() && mCache != null) {
-            Object obj = mCache.get(key);
-            if (obj != null && obj instanceof byte[]) return (byte[]) obj;
-        }
-        byte[] result = nativeGetByteArray(key);
-        if (mCache != null && result != null) {
-            mCache.put(key, result);
-        }
-        return result;
+        return nativeGetByteArray(key);
     }
 
     public boolean contains(String key) {
-        if (checkSequence() && mCache != null && mCache.containsKey(key)) return true;
         return nativeContains(key);
     }
 
@@ -287,6 +230,4 @@ public class NextKV {
         nativeClearAll();
         updateSequence();
     }
-
-    public static native void nativeDumpCoverage(String path);
 }

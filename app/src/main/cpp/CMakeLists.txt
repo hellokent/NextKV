@@ -39,8 +39,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
 # Aggressive optimizations
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
-    -O3
-    -flto
+    -fprofile-instr-generate
+    -fcoverage-mapping
+    -O0
     -fno-exceptions
     -fno-rtti
     -ffast-math
@@ -55,8 +56,6 @@ if(${CMAKE_ANDROID_ARCH_ABI} STREQUAL "armeabi-v7a" OR ${CMAKE_ANDROID_ARCH_ABI}
 endif()
 
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
-    -O3
-    -flto
-    -Wl,--gc-sections
-    -Wl,--icf=all
+    -fprofile-instr-generate
+    -fcoverage-mapping
 )
