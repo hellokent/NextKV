@@ -40,18 +40,18 @@ NextKV has been rigorously tested in a 1,000,000-iteration Cartesian product ben
 ### 🖥️ Server Ecosystem - Go / Rust / C++ / Java
 *Test Device: Apple Silicon M-Series (ARM64 macOS) - 100,000 Iterations*
 
-| Ecosystem | Competitor | Competitor MT MIXED | NextKV MT MIXED | Competitor ST PUT (Int) | NextKV ST PUT (Int) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Golang** | BadgerDB | 372 ms | **46 ms 👑** | 112 ms | **29 ms 👑** |
-| **Golang** | Bbolt | 1660 ms | **46 ms 👑** | 558 ms | **29 ms 👑** |
-| **Rust** | Sled | 36 ms | **30 ms 👑** | 168 ms | **25 ms 👑** |
-| **Rust** | Redb | 157 ms | **30 ms 👑** | 117 ms | **25 ms 👑** |
-| **C/C++** | RocksDB | 652 ms | **14 ms 👑** | 257 ms | **26 ms 👑** |
-| **C/C++** | LMDB | 727 ms | **14 ms 👑** | 725 ms | **26 ms 👑** |
-| **Java** | MapDB | 169 ms | **26 ms 👑** | 305 ms | **36 ms 👑** |
-| **Java** | Xodus | 1776 ms | **26 ms 👑** | 2622 ms | **36 ms 👑** |
+| Ecosystem | Competitor | Comp. ST PUT | NextKV ST PUT | Comp. ST GET | NextKV ST GET | Comp. MT MIXED | NextKV MT MIXED |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Golang** | BadgerDB | 112 ms | **29 ms 👑** | 74 ms | **34 ms 👑** | 372 ms | **46 ms 👑** |
+| **Golang** | Bbolt | 558 ms | **29 ms 👑** | **30 ms 👑** | 34 ms | 1660 ms | **46 ms 👑** |
+| **Rust** | Sled | 168 ms | **25 ms 👑** | 29 ms | **27 ms 👑** | 36 ms | **30 ms 👑** |
+| **Rust** | Redb | 117 ms | **25 ms 👑** | **25 ms 👑** | 27 ms | 157 ms | **30 ms 👑** |
+| **C/C++** | RocksDB | 257 ms | **26 ms 👑** | 59 ms | **11 ms 👑** | 652 ms | **14 ms 👑** |
+| **C/C++** | LMDB | 725 ms | **26 ms 👑** | 29 ms | **11 ms 👑** | 727 ms | **14 ms 👑** |
+| **Java** | MapDB | 305 ms | **36 ms 👑** | 71 ms | **4 ms 👑** | 169 ms | **26 ms 👑** |
+| **Java** | Xodus | 2622 ms | **36 ms 👑** | 122 ms | **4 ms 👑** | 1776 ms | **26 ms 👑** |
 
-*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB, RocksDB, and MapDB in micro-cache state-machine scenarios.*
+*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB, RocksDB, and MapDB in micro-cache state-machine scenarios. (Note: ST PUT measures Integer insertions, ST GET measures String retrievals)*
 
 ---
 
