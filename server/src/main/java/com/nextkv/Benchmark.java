@@ -212,9 +212,9 @@ private static void runNextKV_MP() throws Exception {
             System.out.println("LMDB(JNI)    ST PUT (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                ByteBuffer k = ByteBuffer.allocateDirect(keys[i].getBytes().length).put(keys[i].getBytes()).flip();
-                try (Txn<ByteBuffer> txn = env.txnRead()) {
+            try (Txn<ByteBuffer> txn = env.txnRead()) {
+                for(int i=0; i<ITERATIONS; i++) {
+                    ByteBuffer k = ByteBuffer.allocateDirect(keys[i].getBytes().length).put(keys[i].getBytes()).flip();
                     db.get(txn, k);
                 }
             }
@@ -229,9 +229,9 @@ private static void runNextKV_MP() throws Exception {
             System.out.println("LMDB(JNI)    ST PUT (String): " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                ByteBuffer k = ByteBuffer.allocateDirect(keys[i].getBytes().length).put(keys[i].getBytes()).flip();
-                try (Txn<ByteBuffer> txn = env.txnRead()) {
+            try (Txn<ByteBuffer> txn = env.txnRead()) {
+                for(int i=0; i<ITERATIONS; i++) {
+                    ByteBuffer k = ByteBuffer.allocateDirect(keys[i].getBytes().length).put(keys[i].getBytes()).flip();
                     db.get(txn, k);
                 }
             }
@@ -276,8 +276,13 @@ private static void runNextKV_MP() throws Exception {
             try (final RocksDB db = RocksDB.open(options, dir.getAbsolutePath())) {
                 
                 long start = System.currentTimeMillis();
-                for(int i=0; i<ITERATIONS; i++) {
-                    db.put(keys[i].getBytes(), String.valueOf(intValues[i]).getBytes());
+                try(org.rocksdb.WriteBatch batch = new org.rocksdb.WriteBatch()) {
+                    for(int i=0; i<ITERATIONS; i++) {
+                        batch.put(keys[i].getBytes(), ByteBuffer.allocate(4).putInt(intValues[i]).array());
+                    }
+                    try(org.rocksdb.WriteOptions opt = new org.rocksdb.WriteOptions()) {
+                        db.write(opt, batch);
+                    }
                 }
                 System.out.println("RocksDB(JNI) ST PUT (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
@@ -288,8 +293,13 @@ private static void runNextKV_MP() throws Exception {
                 System.out.println("RocksDB(JNI) ST GET (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
                 start = System.currentTimeMillis();
-                for(int i=0; i<ITERATIONS; i++) {
-                    db.put(keys[i].getBytes(), stringValues[i].getBytes());
+                try(org.rocksdb.WriteBatch batch = new org.rocksdb.WriteBatch()) {
+                    for(int i=0; i<ITERATIONS; i++) {
+                        batch.put(keys[i].getBytes(), stringValues[i].getBytes());
+                    }
+                    try(org.rocksdb.WriteOptions opt = new org.rocksdb.WriteOptions()) {
+                        db.write(opt, batch);
+                    }
                 }
                 System.out.println("RocksDB(JNI) ST PUT (String): " + (System.currentTimeMillis() - start) + " ms");
 
@@ -332,9 +342,12 @@ private static void runNextKV_MP() throws Exception {
         try(DB db = factory.open(dir, options)) {
 
             long start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                db.put(keys[i].getBytes(), String.valueOf(intValues[i]).getBytes());
-            }
+            try(org.iq80.leveldb.WriteBatch batch = db.createWriteBatch()) {
+                    for(int i=0; i<ITERATIONS; i++) {
+                        batch.put(keys[i].getBytes(), ByteBuffer.allocate(4).putInt(intValues[i]).array());
+                    }
+                    db.write(batch);
+                }
             System.out.println("LevelDB(J)   ST PUT (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
@@ -344,9 +357,12 @@ private static void runNextKV_MP() throws Exception {
             System.out.println("LevelDB(J)   ST GET (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                db.put(keys[i].getBytes(), stringValues[i].getBytes());
-            }
+            try(org.iq80.leveldb.WriteBatch batch = db.createWriteBatch()) {
+                    for(int i=0; i<ITERATIONS; i++) {
+                        batch.put(keys[i].getBytes(), stringValues[i].getBytes());
+                    }
+                    db.write(batch);
+                }
             System.out.println("LevelDB(J)   ST PUT (String): " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
@@ -490,39 +506,35 @@ private static void runNextKV_MP() throws Exception {
                 env.openStore("store", StoreConfig.WITHOUT_DUPLICATES, txn));
             
             long start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                int finalI = i;
-                env.executeInTransaction(txn -> {
-                    store.put(txn, new ArrayByteIterable(keys[finalI].getBytes()), new ArrayByteIterable(String.valueOf(intValues[finalI]).getBytes()));
-                });
-            }
+            env.executeInTransaction(txn -> {
+                for(int i=0; i<ITERATIONS; i++) {
+                    store.put(txn, new ArrayByteIterable(keys[i].getBytes()), new ArrayByteIterable(ByteBuffer.allocate(4).putInt(intValues[i]).array()));
+                }
+            });
             System.out.println("Xodus(J)     ST PUT (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                int finalI = i;
-                env.executeInReadonlyTransaction(txn -> {
-                    store.get(txn, new ArrayByteIterable(keys[finalI].getBytes()));
-                });
-            }
+            env.executeInReadonlyTransaction(txn -> {
+                for(int i=0; i<ITERATIONS; i++) {
+                    store.get(txn, new ArrayByteIterable(keys[i].getBytes()));
+                }
+            });
             System.out.println("Xodus(J)     ST GET (Int):    " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                int finalI = i;
-                env.executeInTransaction(txn -> {
-                    store.put(txn, new ArrayByteIterable(keys[finalI].getBytes()), new ArrayByteIterable(stringValues[finalI].getBytes()));
-                });
-            }
+            env.executeInTransaction(txn -> {
+                for(int i=0; i<ITERATIONS; i++) {
+                    store.put(txn, new ArrayByteIterable(keys[i].getBytes()), new ArrayByteIterable(stringValues[i].getBytes()));
+                }
+            });
             System.out.println("Xodus(J)     ST PUT (String): " + (System.currentTimeMillis() - start) + " ms");
 
             start = System.currentTimeMillis();
-            for(int i=0; i<ITERATIONS; i++) {
-                int finalI = i;
-                env.executeInReadonlyTransaction(txn -> {
-                    store.get(txn, new ArrayByteIterable(keys[finalI].getBytes()));
-                });
-            }
+            env.executeInReadonlyTransaction(txn -> {
+                for(int i=0; i<ITERATIONS; i++) {
+                    store.get(txn, new ArrayByteIterable(keys[i].getBytes()));
+                }
+            });
             System.out.println("Xodus(J)     ST GET (String): " + (System.currentTimeMillis() - start) + " ms");
 
             int threads = 4;

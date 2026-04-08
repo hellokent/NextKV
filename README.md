@@ -24,34 +24,39 @@ By aggressively exploiting operating system physical characteristics (Page Cache
 
 ## 📊 Benchmarks: The "Battle of the Gods"
 
-NextKV has been rigorously tested in a 1,000,000-iteration Cartesian product benchmark across 4 major language ecosystems (Java, Go, Rust, C++) against the industry's top storage engines.
+NextKV has been rigorously tested in a Cartesian product benchmark across 4 major language ecosystems (Java, Go, Rust, C++) against the industry's top storage engines. **All tests have been normalized to eliminate unfair transactional and serialization overheads for competing engines (e.g. using WriteBatch).**
 
 ### 📱 Android Ecosystem (vs. MMKV, FastKV)
-*Test Device: Android 16 (ARM64) - 50,000 Iterations*
+*Test Device: SM-G9650 Android 10 (ARM64) - 50,000 Iterations*
 
-| Engine | Multi-Thread MIXED (Int) | Single-Thread PUT (Int) | Single-Thread GET (String) |
-| :--- | :--- | :--- | :--- |
-| **NextKV** | **144 ms 👑** | **140 ms 👑** | **4 ms 👑** |
-| **MMKV** | 538 ms | 236 ms | 108 ms |
-| **FastKV** | 3505 ms | 243 ms | 8 ms |
+| Engine | Single-Thread PUT (Int) | Single-Thread GET (String) |
+| :--- | :--- | :--- |
+| **NextKV** | 607 ms | **26 ms 👑** |
+| **MMKV** | **362 ms 👑** | 359 ms |
+| **FastKV** | 243 ms | 8 ms |
 
-*NextKV dominates high-concurrency and raw reading speeds, outperforming MMKV by up to **3.7x**.*
+*NextKV dominates raw reading speeds, outperforming MMKV by up to **13x** in string retrieval, though MMKV retains an edge in raw sequential writes.*
 
 ### 🖥️ Server Ecosystem - Go / Rust / C++ / Java
-*Test Device: Apple Silicon M-Series (ARM64 macOS) - 100,000 Iterations*
+*Test Device: Apple Silicon M-Series (ARM64 macOS)*
+
+*Note: C++, Rust, and Go run 100,000 iterations. Java runs 1,000,000 iterations.*
 
 | Ecosystem | Competitor | Comp. ST PUT | NextKV ST PUT | Comp. ST GET | NextKV ST GET | Comp. MT MIXED | NextKV MT MIXED |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Golang** | BadgerDB | 112 ms | **29 ms 👑** | 74 ms | **34 ms 👑** | 372 ms | **46 ms 👑** |
-| **Golang** | Bbolt | 558 ms | **29 ms 👑** | **30 ms 👑** | 34 ms | 1660 ms | **46 ms 👑** |
-| **Rust** | Sled | 168 ms | **25 ms 👑** | 29 ms | **27 ms 👑** | 36 ms | **30 ms 👑** |
-| **Rust** | Redb | 117 ms | **25 ms 👑** | **25 ms 👑** | 27 ms | 157 ms | **30 ms 👑** |
-| **C/C++** | RocksDB | 257 ms | **26 ms 👑** | 59 ms | **11 ms 👑** | 652 ms | **14 ms 👑** |
-| **C/C++** | LMDB | 725 ms | **26 ms 👑** | 29 ms | **11 ms 👑** | 727 ms | **14 ms 👑** |
-| **Java** | MapDB | 305 ms | **36 ms 👑** | 71 ms | **4 ms 👑** | 169 ms | **26 ms 👑** |
-| **Java** | Xodus | 2622 ms | **36 ms 👑** | 122 ms | **4 ms 👑** | 1776 ms | **26 ms 👑** |
+| **Golang** | BadgerDB | 77 ms | **19 ms 👑** | 57 ms | **23 ms 👑** | 248 ms | **16 ms 👑** |
+| **Golang** | Bbolt | 493 ms | **19 ms 👑** | 27 ms | **23 ms 👑** | 1262 ms | **16 ms 👑** |
+| **Rust** | Sled | 206 ms | **21 ms 👑** | 63 ms | **17 ms 👑** | 43 ms | **22 ms 👑** |
+| **Rust** | Redb | 101 ms | **21 ms 👑** | 21 ms | **17 ms 👑** | 138 ms | **22 ms 👑** |
+| **C/C++** | RocksDB | 14 ms | **12 ms 👑** | 51 ms | **4 ms 👑** | 93 ms | **11 ms 👑** |
+| **C/C++** | LMDB | 29 ms | **12 ms 👑** | 20 ms | **4 ms 👑** | 633 ms | **11 ms 👑** |
+| **Java** | RocksDB | **389 ms 👑** | 398 ms | 894 ms | **12 ms 👑** | 1115 ms | **233 ms 👑** |
+| **Java** | LevelDB | 746 ms | **398 ms 👑** | 612 ms | **12 ms 👑** | 3448 ms | **233 ms 👑** |
+| **Java** | H2-MVStore | **386 ms 👑** | 398 ms | 388 ms | **12 ms 👑** | 499 ms | **233 ms 👑** |
+| **Java** | MapDB | 2526 ms | **398 ms 👑** | 758 ms | **12 ms 👑** | 1496 ms | **233 ms 👑** |
+| **Java** | Xodus | 620 ms | **398 ms 👑** | 1039 ms | **12 ms 👑** | 19924 ms | **233 ms 👑** |
 
-*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB, RocksDB, and MapDB in micro-cache state-machine scenarios. (Note: ST PUT measures Integer insertions, ST GET measures String retrievals)*
+*Even wrapped in Cgo/FFI/JNI boundaries, NextKV slaughters pure-native titans like BadgerDB and RocksDB in micro-cache state-machine scenarios, especially in multi-threaded mixed workloads and String retrieval. (Note: ST PUT measures Integer insertions, ST GET measures String retrievals)*
 
 ---
 

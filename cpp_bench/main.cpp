@@ -101,9 +101,11 @@ void runRocksDB() {
     rocksdb::Status status = rocksdb::DB::Open(options, "rocksdb_cpp_data", &db);
     
     auto start = std::chrono::high_resolution_clock::now();
+    rocksdb::WriteBatch batch;
     for (int i = 0; i < ITERATIONS; i++) {
-        db->Put(rocksdb::WriteOptions(), keys[i], std::to_string(intValues[i]));
+        batch.Put(keys[i], rocksdb::Slice((const char*)&intValues[i], sizeof(int32_t)));
     }
+    db->Write(rocksdb::WriteOptions(), &batch);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "RocksDB(C++) ST PUT (Int):    " << elapsed << " ms\n";
 
@@ -116,9 +118,11 @@ void runRocksDB() {
     std::cout << "RocksDB(C++) ST GET (Int):    " << elapsed << " ms\n";
 
     start = std::chrono::high_resolution_clock::now();
+    rocksdb::WriteBatch batch2;
     for (int i = 0; i < ITERATIONS; i++) {
-        db->Put(rocksdb::WriteOptions(), keys[i], stringValues[i]);
+        batch2.Put(keys[i], stringValues[i]);
     }
+    db->Write(rocksdb::WriteOptions(), &batch2);
     elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "RocksDB(C++) ST PUT (String): " << elapsed << " ms\n";
 
@@ -173,46 +177,46 @@ void runLMDB() {
     mdb_txn_commit(txn);
 
     auto start = std::chrono::high_resolution_clock::now();
+    mdb_txn_begin(env, NULL, 0, &txn);
     for (int i = 0; i < ITERATIONS; i++) {
         MDB_val k = { keys[i].size(), (void*)keys[i].data() };
         MDB_val v = { sizeof(int32_t), &intValues[i] };
-        mdb_txn_begin(env, NULL, 0, &txn);
         mdb_put(txn, dbi, &k, &v, 0);
-        mdb_txn_commit(txn);
     }
+    mdb_txn_commit(txn);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "LMDB(C++)    ST PUT (Int):    " << elapsed << " ms\n";
 
     start = std::chrono::high_resolution_clock::now();
+    mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
     for (int i = 0; i < ITERATIONS; i++) {
         MDB_val k = { keys[i].size(), (void*)keys[i].data() };
         MDB_val v;
-        mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
         mdb_get(txn, dbi, &k, &v);
-        mdb_txn_commit(txn);
     }
+    mdb_txn_commit(txn);
     elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "LMDB(C++)    ST GET (Int):    " << elapsed << " ms\n";
 
     start = std::chrono::high_resolution_clock::now();
+    mdb_txn_begin(env, NULL, 0, &txn);
     for (int i = 0; i < ITERATIONS; i++) {
         MDB_val k = { keys[i].size(), (void*)keys[i].data() };
         MDB_val v = { stringValues[i].size(), (void*)stringValues[i].data() };
-        mdb_txn_begin(env, NULL, 0, &txn);
         mdb_put(txn, dbi, &k, &v, 0);
-        mdb_txn_commit(txn);
     }
+    mdb_txn_commit(txn);
     elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "LMDB(C++)    ST PUT (String): " << elapsed << " ms\n";
 
     start = std::chrono::high_resolution_clock::now();
+    mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
     for (int i = 0; i < ITERATIONS; i++) {
         MDB_val k = { keys[i].size(), (void*)keys[i].data() };
         MDB_val v;
-        mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
         mdb_get(txn, dbi, &k, &v);
-        mdb_txn_commit(txn);
     }
+    mdb_txn_commit(txn);
     elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "LMDB(C++)    ST GET (String): " << elapsed << " ms\n";
 

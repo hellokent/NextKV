@@ -167,9 +167,11 @@ fn main() {
     let sled_db = sled::open("sled_db").unwrap();
 
     start = Instant::now();
+    let mut batch = sled::Batch::default();
     for i in 0..ITERATIONS {
-        sled_db.insert(keys[i].as_bytes(), &int_vals[i].to_le_bytes()).unwrap();
+        batch.insert(keys[i].as_bytes(), &int_vals[i].to_le_bytes());
     }
+    sled_db.apply_batch(batch).unwrap();
     println!("Sled         ST PUT (Int):    {} ms", start.elapsed().as_millis());
 
     start = Instant::now();
@@ -179,9 +181,11 @@ fn main() {
     println!("Sled         ST GET (Int):    {} ms", start.elapsed().as_millis());
 
     start = Instant::now();
+    let mut batch = sled::Batch::default();
     for i in 0..ITERATIONS {
-        sled_db.insert(keys[i].as_bytes(), string_vals[i].as_bytes()).unwrap();
+        batch.insert(keys[i].as_bytes(), string_vals[i].as_bytes());
     }
+    sled_db.apply_batch(batch).unwrap();
     println!("Sled         ST PUT (String): {} ms", start.elapsed().as_millis());
 
     start = Instant::now();
